@@ -71,7 +71,7 @@ parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight dec
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
 parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
 # Dataloader
@@ -228,6 +228,14 @@ elif args.dataset == "hd":
     d_output = 10
     collate_fn = None
 
+elif args.dataset == "pathfinder": # denoising task
+    from pathfinder import PathFinderDataset
+    trainset = PathFinderDataset(transform=transforms.ToTensor())
+    valset = PathFinderDataset(transform=transforms.ToTensor())
+    testset = PathFinderDataset(transform=transforms.ToTensor())
+    d_input = 1
+    d_output = 2
+
 elif args.dataset == "dn": # denoising task
     trainset = DNSAudio(args, root=dataset_folder + 'training_set/')
     valset = DNSAudio(args, root=dataset_folder + 'validation_set/')
@@ -265,12 +273,20 @@ def custom_collate(batch):
     return batch_padded
 
 # Dataloaders
-trainloader = torch.utils.data.DataLoader(
-    trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
-valloader = torch.utils.data.DataLoader(
-    valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
-testloader = torch.utils.data.DataLoader(
-    testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+if args.dataset == "pathfinder":
+    trainloader = torch.utils.data.DataLoader(
+            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    valloader = torch.utils.data.DataLoader(
+            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    testloader = torch.utils.data.DataLoader(
+            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+else:
+    trainloader = torch.utils.data.DataLoader(
+        trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
+    valloader = torch.utils.data.DataLoader(
+        valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+    testloader = torch.utils.data.DataLoader(
+        testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
 
 model_args = {
     'A_quant': args.A_quant,
