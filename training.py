@@ -231,8 +231,19 @@ elif args.dataset == "hd":
 elif args.dataset == "pathfinder": # denoising task
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
-    valset = PathFinderDataset(transform=transforms.ToTensor())
-    testset = PathFinderDataset(transform=transforms.ToTensor())
+    len_dataset = len(trainset)
+    val_split = 0.1
+    test_split = 0.1
+    val_len = int(val_split * len_dataset)
+    test_len = int(test_split * len_dataset)
+    train_len = len_dataset - val_len - test_len
+    (trainset,
+     valset,
+     testset) = torch.utils.data.random_split(
+             trainset,
+             [train_len, val_len, test_len],
+             generator=torch.Generator().manual_seed(42))
+
     d_input = 1
     d_output = 2
 
