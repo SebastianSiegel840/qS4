@@ -232,11 +232,13 @@ elif args.dataset == "pathfinder": # denoising task
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
     len_dataset = len(trainset)
+
     val_split = 0.1
     test_split = 0.1
     val_len = int(val_split * len_dataset)
     test_len = int(test_split * len_dataset)
     train_len = len_dataset - val_len - test_len
+
     (trainset,
      valset,
      testset) = torch.utils.data.random_split(
@@ -288,16 +290,19 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+            valset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     testloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+            testset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 else:
     trainloader = torch.utils.data.DataLoader(
-        trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
+        trainset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     valloader = torch.utils.data.DataLoader(
-        valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        valset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(
-        testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        testset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
 
 model_args = {
     'A_quant': args.A_quant,
