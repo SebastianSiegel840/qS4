@@ -4,6 +4,9 @@ from torch.utils.data import Dataset
 import torch
 import torchaudio.transforms as T
 
+from gsc import SPEECHCOMMANDS
+import os
+
 class HD(Dataset):
     def __init__(self, path, transform=None, target_transform=None, language="english", subset="all", subsample=1):
         self.data_path = path + "/audio"
@@ -109,3 +112,22 @@ class HDold(Dataset):
         if self.target_transform:
             sample = self.target_transform(label)
         return sample, label
+    
+gsc_path = "/Data/pgi-15/datasets/GSC/"
+class SC(SPEECHCOMMANDS):
+    def __init__(self, subset: str = None):
+        super().__init__(gsc_path, download=False)
+
+        def load_list(filename):
+            filepath = os.path.join(self._path, filename)
+            with open(filepath) as fileobj:
+                return [os.path.normpath(os.path.join(self._path, line.strip())) for line in fileobj]
+
+        if subset == "validation":
+            self._walker = load_list("validation_list.txt")
+        elif subset == "testing":
+            self._walker = load_list("testing_list.txt")
+        elif subset == "training":
+            excludes = load_list("validation_list.txt") + load_list("testing_list.txt")
+            excludes = set(excludes)
+            self._walker = [w for w in self._walker if w not in excludes]

@@ -23,6 +23,8 @@ Each epoch takes approximately 7m20s on a T4 GPU (will be much faster on V100 / 
 '''
 print("Started!")
 
+ENERGY_MONITOR = True
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -39,7 +41,7 @@ import wandb
 import numpy as np
 
 from tqdm.auto import tqdm
-
+    
 import audio_dataset
 #from audio_dataloader_split_samples import DNSAudio
 
@@ -66,7 +68,7 @@ parser.add_argument('--project', type=str, default='test', help='wandb project n
 parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
-parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight decay')
+parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
 # Scheduler
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
@@ -90,6 +92,8 @@ parser.add_argument('--splitting_factor', type=int, default=1, help='Number of c
 parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
+parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
+
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
@@ -111,6 +115,11 @@ args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
 setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
 device = torch.device('cuda:{}'.format(args.gpu[0]))
+
+if args.enery:
+    from zeus.monitor import ZeusMonitor
+    monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
+
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -228,7 +237,7 @@ elif args.dataset == "hd":
     d_output = 10
     collate_fn = None
 
-elif args.dataset == "pathfinder": # denoising task
+elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
     valset = PathFinderDataset(transform=transforms.ToTensor())
@@ -277,9 +286,9 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
     testloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
 else:
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
@@ -287,17 +296,6 @@ else:
         valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(
         testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
-
-model_args = {
-    'A_quant': args.A_quant,
-    'B_quant': args.B_quant,
-    'C_quant': args.C_quant,
-    'dt_quant': args.dt_quant,
-    'kernel_quant': args.kernel_quant,
-    'linear_quant': args.linear_quant,
-    'act_quant': args.act_quant,
-    'coder_quant': args.coder_quant
-}
 
 if args.all_quant is not None:
     model_args = {
@@ -309,8 +307,19 @@ if args.all_quant is not None:
         'linear_quant': args.all_quant,
         'act_quant': args.all_quant,
         'coder_quant': args.all_quant
-}
-    
+    }
+else:
+    model_args = {
+        'A_quant': args.A_quant,
+        'B_quant': args.B_quant,
+        'C_quant': args.C_quant,
+        'dt_quant': args.dt_quant,
+        'kernel_quant': args.kernel_quant,
+        'linear_quant': args.linear_quant,
+        'act_quant': args.act_quant,
+        'coder_quant': args.coder_quant
+    }
+'''  
 if args.A_quant is not None:
     model_args['A_quant'] = args.A_quant
 if args.B_quant is not None:
@@ -326,7 +335,12 @@ if args.linear_quant is not None:
 if args.act_quant is not None:
     model_args['act_quant'] = args.act_quant
 if args.coder_quant is not None:
-    model_args['coder_quant'] = args.coder_quant
+    model_args['coder_quant'] = args.coder_quant'''
+
+for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
+    if model_args[arg] == 'None':
+        model_args[arg] = None
+
 # Model
 print('==> Building model..')
 model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
@@ -339,20 +353,8 @@ state = {
 
 if not os.path.isdir('checkpoint'):
     os.mkdir('checkpoint')
-#if not os.path.isdir('checkpoint/layerstxt'):
-#    os.mkdir('checkpoint/layerstxt')
 if args.check_path is not None and not os.path.isdir('checkpoint/' + args.check_path):
     os.mkdir('checkpoint/' + args.check_path)
-#for layer in state['model']:
-#    save = state['model'][layer].cpu().numpy()
-#    if len(save.shape) < 3 and len(save.shape) > 0:
-#        np.savetxt('checkpoint/layerstxt/' + layer + '_init.vcsv', save, fmt='%5.4f')
-#    elif len(save.shape) == 3:
-#        for i in range(len(save[0, 0, :])):
-#            np.savetxt('checkpoint/layerstxt/' + layer + '_' + format(i) + '_init.vcsv', save[:, :, i], fmt='%5.4f')
-#    elif len(save.shape) == 4:
-#        for i in range(len(save[0, 0, 0, :])):
-#            np.savetxt('checkpoint/layerstxt/' + layer + '_' + format(i) + '_init.vcsv', save[0, :, :, i], fmt='%5.4f')
 
 ###############################################
 ###############################################
@@ -532,6 +534,9 @@ def eval(epoch, dataloader, checkpoint=False):
 
         return acc
 
+if args.energy:
+    monitor.begin_window("training")
+
 pbar = tqdm(range(start_epoch, args.epochs))
 best_acc = 0
 for epoch in pbar:
@@ -563,3 +568,7 @@ if args.check_path is not None:
                 exit()
     file.write("baseline\tfloat\t" + format(best_acc) + "\n")
     file.close()
+
+if args.energy:
+    meas_total = monitor.end_window("training")
+    print(f"Total energy consumption of training run: {meas_total.total_energy / 3.6e6} kWh")

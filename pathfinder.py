@@ -23,7 +23,7 @@ class PathFinderDataset(torch.utils.data.Dataset):
         self.transform = transform
         samples = []
         # for diff_level in ['curv_baseline', 'curv_contour_length_9', 'curv_contour_length_14']:
-        for diff_level in ["curv_contour_length_14"]:
+        for diff_level in ["curv_baseline"]:
             path_list = sorted(
                 list((self.data_dir / diff_level / "metadata").glob("*.npy")),
                 key=lambda path: int(path.stem),
@@ -52,7 +52,9 @@ class PathFinderDataset(torch.utils.data.Dataset):
             sample = Image.open(f).convert("L")  # Open in grayscale
         if self.transform is not None:
             sample = self.transform(sample)
-        return sample.flatten(start_dim=1).permute(1,0), target
+        #import pdb
+        #pdb.set_trace()
+        return sample.flatten(start_dim=1).permute(1,0), target #.permute(1,0)
     
 def make_loader(args, Dataset, train=True):
     # Training batch size is definined by argument. 

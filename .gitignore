@@ -46,3 +46,5 @@ __pycache__
 evaluation
 checkpoint
 wandb
+_deprecated
+data
