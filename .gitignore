@@ -48,3 +48,5 @@ checkpoint
 wandb
 _deprecated
 data
+
+training_copy.py

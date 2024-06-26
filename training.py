@@ -63,9 +63,9 @@ else:
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--name', type=str, default='test', help='wandb run name')
-parser.add_argument('--project', type=str, default='test', help='wandb project name')
-parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
+parser.add_argument('--name', type=str, default='example', help='wandb run name')
+parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
+parser.add_argument('--wb', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
@@ -127,7 +127,7 @@ start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 wandb_run = wandb.init(project=args.project,
                         name=args.name,
                         config=args,
-                        mode=args.wandb_status)
+                        mode=args.wb)
 # change args dictonary to a wandb config object and allow wandb to track it
 args = wandb_run.config  
 
@@ -240,8 +240,21 @@ elif args.dataset == "hd":
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
-    valset = PathFinderDataset(transform=transforms.ToTensor())
-    testset = PathFinderDataset(transform=transforms.ToTensor())
+    len_dataset = len(trainset)
+
+    val_split = 0.1
+    test_split = 0.1
+    val_len = int(val_split * len_dataset)
+    test_len = int(test_split * len_dataset)
+    train_len = len_dataset - val_len - test_len
+
+    (trainset,
+     valset,
+     testset) = torch.utils.data.random_split(
+             trainset,
+             [train_len, val_len, test_len],
+             generator=torch.Generator().manual_seed(42))
+
     d_input = 1
     d_output = 2
 
@@ -286,16 +299,30 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+            valset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     testloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+            testset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 else:
     trainloader = torch.utils.data.DataLoader(
-        trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
+        trainset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     valloader = torch.utils.data.DataLoader(
-        valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        valset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(
-        testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        testset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
+
+model_args = {
+    'A_quant': args.A_quant,
+    'B_quant': args.B_quant,
+    'C_quant': args.C_quant,
+    'dt_quant': args.dt_quant,
+    'kernel_quant': args.kernel_quant,
+    'linear_quant': args.linear_quant,
+    'act_quant': args.act_quant,
+    'coder_quant': args.coder_quant
+}
 
 if args.all_quant is not None:
     model_args = {
@@ -418,9 +445,12 @@ def setup_optimizer(model, lr, weight_decay, epochs):
     return optimizer, scheduler
 
 criterion = nn.CrossEntropyLoss()
-optimizer, scheduler = setup_optimizer(
-    model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
-)
+#optimizer, scheduler = setup_optimizer(
+#    model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
+#)
+optimizer = torch.optim.Adam(model.parameters(),
+                             lr=args.lr,
+                             weight_decay=args.weight_decay)  # 1e-2
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
@@ -465,8 +495,11 @@ def train():
 
             pbar.set_description(
                 'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-            )
+                (batch_idx, len(trainloader), train_loss/(batch_idx+1),
+                 100.*correct/total, correct, total))
+            
+            wandb.log({'loss': train_loss/(batch_idx+1), 
+                       'acc': 100*correct/total})
 
 
 def eval(epoch, dataloader, checkpoint=False):
@@ -494,11 +527,14 @@ def eval(epoch, dataloader, checkpoint=False):
 
                 pbar.set_description(
                     'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
-                )
+                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
+                     100.*correct/total, correct, total))
             else:
                 checkpoint = False
                 acc = 0
+ 
+        wandb.log({'val_loss': eval_loss/(batch_idx+1), 
+                   'val_acc': 100*correct/total})
 
     # Save checkpoint.
     if checkpoint:
@@ -540,19 +576,21 @@ if args.energy:
 pbar = tqdm(range(start_epoch, args.epochs))
 best_acc = 0
 for epoch in pbar:
-    if epoch == 0:
-        pbar.set_description('Epoch: %d' % (epoch))
-    else:
-        pbar.set_description('Epoch: %d | Val acc: %1.3f' % (epoch, val_acc))
+
+    print("Epoch", epoch)
+    wandb.log({'epoch': epoch})
+
     start = time.time()
     train()
     print("train time", time.time() - start)
+    print("Validation ...")
     val_acc = eval(epoch, valloader, checkpoint=True)
     if val_acc > best_acc:
         best_acc = val_acc
+    print("Testing ...")
     eval(epoch, testloader)
-    scheduler.step()
-    print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
+    # scheduler.step()
+    # print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
 
 if args.check_path is not None:
     file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
