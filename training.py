@@ -23,8 +23,6 @@ Each epoch takes approximately 7m20s on a T4 GPU (will be much faster on V100 / 
 '''
 print("Started!")
 
-ENERGY_MONITOR = True
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -116,7 +114,7 @@ setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
 device = torch.device('cuda:{}'.format(args.gpu[0]))
 
-if args.enery:
+if args.energy:
     from zeus.monitor import ZeusMonitor
     monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
 
@@ -240,8 +238,25 @@ elif args.dataset == "hd":
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
-    valset = PathFinderDataset(transform=transforms.ToTensor())
-    testset = PathFinderDataset(transform=transforms.ToTensor())
+    ###### valset = PathFinderDataset(transform=transforms.ToTensor())
+    ###### testset = PathFinderDataset(transform=transforms.ToTensor())
+
+    ################ Added ################# Works! ###########################
+    len_dataset = len(trainset)
+
+    val_split = 0.1
+    test_split = 0.1
+    val_len = int(val_split * len_dataset)
+    test_len = int(test_split * len_dataset)
+    train_len = len_dataset - val_len - test_len
+
+    (trainset,
+     valset,
+     testset) = torch.utils.data.random_split(
+             trainset,
+             [train_len, val_len, test_len],
+             generator=torch.Generator().manual_seed(42))
+    ############# Added #####################
     d_input = 1
     d_output = 2
 
@@ -286,9 +301,9 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+            valset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
     testloader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+            testset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
 else:
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
@@ -418,9 +433,15 @@ def setup_optimizer(model, lr, weight_decay, epochs):
     return optimizer, scheduler
 
 criterion = nn.CrossEntropyLoss()
+
+################### Changed ################## Under investigation ##################
+
 optimizer, scheduler = setup_optimizer(
     model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
 )
+#optimizer = torch.optim.Adam(model.parameters(),
+#                             lr=args.lr,
+#                             weight_decay=args.weight_decay) 
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!

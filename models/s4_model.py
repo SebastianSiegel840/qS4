@@ -52,9 +52,9 @@ class return_args(object):
 
     def return_args_dict(self):
         args = dict(
-            n_layers = 6, #4
-            d_model = 256, #128
-            dropout = 0.0, #0.1
+            n_layers = 4, #4 6 
+            d_model = 128, #128 256
+            dropout = 0.1, #0.1 0.0
             prenorm = 'store_true',
             )   
         return args        
@@ -90,10 +90,10 @@ class S4Model(nn.Module):
 
         for _ in range(n_layers):
             self.s4_layers.append(
-                S4(d_model, dropout=dropout, transposed=True, **model_args)  ## , lr=min(0.001, lr)
+                S4D(d_model, dropout=dropout, transposed=True, **model_args)  ## , lr=min(0.001, lr)
             )
-            ###self.norms.append(nn.LayerNorm(d_model)) ######### Original ! ##################
-            self.norms.append(nn.BatchNorm1d(1024)) ########## norm for pathfinder ##############
+            self.norms.append(nn.LayerNorm(d_model)) ######### Original ! ##################
+            #self.norms.append(nn.BatchNorm1d(1024)) ########## norm for pathfinder ##############
             self.dropouts.append(dropout_fn(dropout))
 
         # Linear decoder

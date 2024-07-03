@@ -49,7 +49,7 @@ def max_quant_fn(a, quant_levels=2):
 
     # a * scale normalizes a. rounding brings them to the next integer. 
     # clamping to cut off values above the quantization limits. / scale to undo normalization
-    a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2, max=quant_levels // 2) / scale
+    a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2 + (quant_levels + 1)%2, max=quant_levels // 2) / scale
     return a_out
 
 # taken from bitnet 1.58b
@@ -61,6 +61,7 @@ def mean_quant_fn(w, quant_levels=2):
     # w * scale normalizes w. rounding brings them to the next integer. 
     # clamping to cut off values above the quantization limits. / scale to undo normalization
     w_out = (w * scale).round().clamp(-quant_levels // 2, quant_levels // 2) / scale
+    #w_out = (w * scale).round().clamp(-quant_levels // 2 + (quant_levels + 1)%2, quant_levels // 2) / scale
     return w_out
 
 
