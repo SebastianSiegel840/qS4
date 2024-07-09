@@ -61,8 +61,8 @@ else:
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--name', type=str, default='example', help='wandb run name')
-parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
+parser.add_argument('--name', type=str, default='test', help='wandb run name')
+parser.add_argument('--project', type=str, default='test', help='wandb project name')
 parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
@@ -301,9 +301,9 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            valset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
+            valset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true
     testloader = torch.utils.data.DataLoader(
-            testset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
+            testset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true
 else:
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
@@ -334,7 +334,23 @@ else:
         'act_quant': args.act_quant,
         'coder_quant': args.coder_quant
     }
-
+'''  
+if args.A_quant is not None:
+    model_args['A_quant'] = args.A_quant
+if args.B_quant is not None:
+    model_args['B_quant'] = args.B_quant
+if args.C_quant is not None:
+    model_args['C_quant'] = args.C_quant
+if args.dt_quant is not None:
+    model_args['dt_quant'] = args.dt_quant
+if args.kernel_quant is not None:
+    model_args['kernel_quant'] = args.kernel_quant
+if args.linear_quant is not None:
+    model_args['linear_quant'] = args.linear_quant
+if args.act_quant is not None:
+    model_args['act_quant'] = args.act_quant
+if args.coder_quant is not None:
+    model_args['coder_quant'] = args.coder_quant'''
 
 for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
     if model_args[arg] == 'None':
@@ -470,9 +486,8 @@ def train():
 
             pbar.set_description(
                 'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-            wandb.log({'loss': train_loss/(batch_idx+1), 
-                       'acc': 100*correct/total})
+                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+            )
 
 
 def eval(epoch, dataloader, checkpoint=False):
@@ -506,9 +521,6 @@ def eval(epoch, dataloader, checkpoint=False):
                 checkpoint = False
                 acc = 0
 
-                wandb.log({'val_loss': eval_loss/(batch_idx+1), 
-                   'val_acc': 100*correct/total})
-                
     # Save checkpoint.
     if checkpoint:
         acc = 100.*correct/total
@@ -556,11 +568,9 @@ for epoch in pbar:
     start = time.time()
     train()
     print("train time", time.time() - start)
-    print("Validation...")
     val_acc = eval(epoch, valloader, checkpoint=True)
     if val_acc > best_acc:
         best_acc = val_acc
-    print("Testing...")
     eval(epoch, testloader)
     scheduler.step()
     print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")

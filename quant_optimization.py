@@ -39,7 +39,7 @@ import wandb
 import numpy as np
 
 from tqdm.auto import tqdm
-    
+
 import audio_dataset
 #from audio_dataloader_split_samples import DNSAudio
 
@@ -61,8 +61,8 @@ else:
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--name', type=str, default='example', help='wandb run name')
-parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
+parser.add_argument('--name', type=str, default='test', help='wandb run name')
+parser.add_argument('--project', type=str, default='test', help='wandb project name')
 parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
@@ -90,8 +90,6 @@ parser.add_argument('--splitting_factor', type=int, default=1, help='Number of c
 parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
-parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
-
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
@@ -113,11 +111,6 @@ args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
 setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
 device = torch.device('cuda:{}'.format(args.gpu[0]))
-
-if args.energy:
-    from zeus.monitor import ZeusMonitor
-    monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
-
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -238,25 +231,8 @@ elif args.dataset == "hd":
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
-    ###### valset = PathFinderDataset(transform=transforms.ToTensor())
-    ###### testset = PathFinderDataset(transform=transforms.ToTensor())
-
-    ################ Added ################# Works! ###########################
-    len_dataset = len(trainset)
-
-    val_split = 0.1
-    test_split = 0.1
-    val_len = int(val_split * len_dataset)
-    test_len = int(test_split * len_dataset)
-    train_len = len_dataset - val_len - test_len
-
-    (trainset,
-     valset,
-     testset) = torch.utils.data.random_split(
-             trainset,
-             [train_len, val_len, test_len],
-             generator=torch.Generator().manual_seed(42))
-    ############# Added #####################
+    valset = PathFinderDataset(transform=transforms.ToTensor())
+    testset = PathFinderDataset(transform=transforms.ToTensor())
     d_input = 1
     d_output = 2
 
@@ -301,9 +277,9 @@ if args.dataset == "pathfinder":
     trainloader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     valloader = torch.utils.data.DataLoader(
-            valset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
+            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
     testloader = torch.utils.data.DataLoader(
-            testset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
+            trainset, batch_size=args.batch_size, shuffle=False, drop_last=True)
 else:
     trainloader = torch.utils.data.DataLoader(
         trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
@@ -312,43 +288,11 @@ else:
     testloader = torch.utils.data.DataLoader(
         testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
 
-if args.all_quant is not None:
-    model_args = {
-        'A_quant': args.all_quant,
-        'B_quant': args.all_quant,
-        'C_quant': args.all_quant,
-        'dt_quant': args.all_quant,
-        'kernel_quant': args.all_quant,
-        'linear_quant': args.all_quant,
-        'act_quant': args.all_quant,
-        'coder_quant': args.all_quant
-    }
-else:
-    model_args = {
-        'A_quant': args.A_quant,
-        'B_quant': args.B_quant,
-        'C_quant': args.C_quant,
-        'dt_quant': args.dt_quant,
-        'kernel_quant': args.kernel_quant,
-        'linear_quant': args.linear_quant,
-        'act_quant': args.act_quant,
-        'coder_quant': args.coder_quant
-    }
 
-
-for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
-    if model_args[arg] == 'None':
-        model_args[arg] = None
-
-# Model
-print('==> Building model..')
-model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
 
 ##############################################
 #### Save initial state ######################
-state = {
-    'model': model.state_dict(),
-}
+
 
 if not os.path.isdir('checkpoint'):
     os.mkdir('checkpoint')
@@ -360,15 +304,6 @@ if args.check_path is not None and not os.path.isdir('checkpoint/' + args.check_
 
 if device == 'cuda':
     cudnn.benchmark = True
-
-if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('./checkpoint/ckpt.pth')
-    model.load_state_dict(checkpoint['model'])
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
 
 def setup_optimizer(model, lr, weight_decay, epochs):
     """
@@ -418,33 +353,18 @@ def setup_optimizer(model, lr, weight_decay, epochs):
 
 criterion = nn.CrossEntropyLoss()
 
-################### Changed ################## Under investigation ##################
-
-optimizer, scheduler = setup_optimizer(
-    model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
-)
-#optimizer = torch.optim.Adam(model.parameters(),
-#                             lr=args.lr,
-#                             weight_decay=args.weight_decay) 
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
 ###############################################################################
 
-t_param = count_trainable_parameters(model)
-print("Trainable parameters:\t" + format(t_param))
-nt_param = count_nontrain_parameters(model)
-print("Non-trainable parameters:\t" + format(nt_param))
-
 if not os.path.isdir('checkpoint'):
     os.mkdir('checkpoint')
-if args.check_path is not None:
-    num_ckpt = len(os.listdir('./checkpoint/' + args.check_path + '/'))
-else:
-    num_ckpt = len(os.listdir('./checkpoint/'))
+
+num_ckpt = 0
 
 # Training
-def train():
+def train(model, optimizer):
     model.train()
     train_loss = 0
     correct = 0
@@ -470,12 +390,11 @@ def train():
 
             pbar.set_description(
                 'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-            wandb.log({'loss': train_loss/(batch_idx+1), 
-                       'acc': 100*correct/total})
+                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+            )
 
 
-def eval(epoch, dataloader, checkpoint=False):
+def eval(epoch, dataloader, model, checkpoint=False):
     global best_acc
     model.eval()
     eval_loss = 0
@@ -506,9 +425,6 @@ def eval(epoch, dataloader, checkpoint=False):
                 checkpoint = False
                 acc = 0
 
-                wandb.log({'val_loss': eval_loss/(batch_idx+1), 
-                   'val_acc': 100*correct/total})
-                
     # Save checkpoint.
     if checkpoint:
         acc = 100.*correct/total
@@ -543,43 +459,146 @@ def eval(epoch, dataloader, checkpoint=False):
 
         return acc
 
-if args.energy:
-    monitor.begin_window("training")
+def run_training(model_args, target_acc=None):
+    # Model
+    print('==> Building model..')
+    model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
+    optimizer, scheduler = setup_optimizer(model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs)
 
-pbar = tqdm(range(start_epoch, args.epochs))
-best_acc = 0
-for epoch in pbar:
-    if epoch == 0:
-        pbar.set_description('Epoch: %d' % (epoch))
-    else:
-        pbar.set_description('Epoch: %d | Val acc: %1.3f' % (epoch, val_acc))
-    start = time.time()
-    train()
-    print("train time", time.time() - start)
-    print("Validation...")
-    val_acc = eval(epoch, valloader, checkpoint=True)
-    if val_acc > best_acc:
-        best_acc = val_acc
-    print("Testing...")
-    eval(epoch, testloader)
-    scheduler.step()
-    print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
+    pbar = tqdm(range(start_epoch, args.epochs))
+    best_acc = 0
+    for epoch in pbar:
+        if epoch == 0:
+            pbar.set_description('Epoch: %d' % (epoch))
+        else:
+            pbar.set_description('Epoch: %d | Val acc: %1.3f' % (epoch, val_acc))
+        start = time.time()
+        train(model, optimizer)
+        print("train time", time.time() - start)
+        val_acc = eval(epoch, valloader, model, checkpoint=True)
+        if val_acc > best_acc:
+            best_acc = val_acc
+        eval(epoch, testloader, model)
+        scheduler.step()
+        print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
 
-if args.check_path is not None:
-    file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
-    if args.all_quant is not None:
-        file.write("all\t" + format(args.all_quant) + "\t" + format(best_acc) + "\n")
+    if args.check_path is not None:
+        file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
+        if args.all_quant is not None:
+            file.write("all\t" + format(args.all_quant) + "\t" + format(best_acc) + "\n")
+        else:
+            for param in model_args:
+                if model_args[param] is not None:
+                    file.write(param + "\t" + format(model_args[param]) + "\t")
+            file.write(format(best_acc) + "\n")
         file.close()
-        exit()
-    else:
-        for param in model_args:
-            if model_args[param] is not None:
-                file.write(param + "\t" + format(model_args[param]) + "\t" + format(best_acc) + "\n")
-                file.close()
-                exit()
-    file.write("baseline\tfloat\t" + format(best_acc) + "\n")
-    file.close()
+    if best_acc >= target_acc:
+        return best_acc
+    return best_acc
 
-if args.energy:
-    meas_total = monitor.end_window("training")
-    print(f"Total energy consumption of training run: {meas_total.total_energy / 3.6e6} kWh")
+
+############ optimization loop ##################
+
+import copy
+
+N = 64
+H = 64
+d_model = 4
+d_in = 1
+d_out = 10
+r_A = 16
+r_B = 16
+r_C = 16
+r_lin = 16
+r_coder = 16
+r_act = 16
+
+model_params = (N, H, d_model, d_in, d_out)
+resolutions = np.array((r_A, r_B, r_C, r_lin, r_coder, r_act))
+
+s4 = False # if  not then S4D
+
+def compute_ace(model_params, resolutions, s4=False):
+    (N, H, d_model, d_in, d_out) = model_params
+    (r_A, r_B, r_C, r_lin, r_coder, r_act) = resolutions
+    
+    if s4:
+        ace_Ax = N * N *  r_A * r_act
+    else:
+        ace_Ax = N * r_A * r_act
+
+    ace_Bu = N * r_B * r_act
+    ace_Cx = N * r_C * r_act
+
+
+    ace_kernel = ace_Ax + ace_Bu + ace_Cx
+    ace_kernels = H * ace_kernel
+    ace_mixing = H * H * r_act * r_lin
+
+    ace_layer = ace_kernels + ace_mixing
+    ace_layers = d_model * ace_layer
+
+    ace_encoder = H * d_in * r_coder * r_act
+    ace_decoder = H * d_out * r_coder * r_act
+
+    ace_total = ace_layers + ace_encoder + ace_decoder
+    #print(ace_total)
+    return ace_total
+
+def compute_complexity_impact(model_params, resolutions, exclusions):
+    ace_changes = np.zeros(len(resolutions))
+    for ires, res in enumerate(resolutions):
+        if resolutions[ires] > 1 and not ires in exclusions:
+            lowered_resolutions = copy.copy(resolutions)
+            lowered_resolutions[ires] = lowered_resolutions[ires] - 1
+            ace_changes[ires] = compute_ace(model_params, resolutions) - compute_ace(model_params, lowered_resolutions)
+    ilower = np.argwhere(ace_changes == np.max(ace_changes))
+    delete_list = []
+    for i, elem in enumerate(ilower):
+        if resolutions[elem] < 1:
+            delete_list.append(i)
+    ilower = np.delete(ilower, delete_list)
+    return ilower, ace_changes
+
+
+model_args = {
+        'A_quant': resolutions[0],
+        'B_quant': resolutions[1],
+        'C_quant': resolutions[2],
+        'dt_quant': 16,
+        'kernel_quant': 16,
+        'linear_quant': resolutions[3],
+        'act_quant': resolutions[5],
+        'coder_quant': resolutions[4]
+    }
+
+exclusion_list = []
+vanilla_acc = 70.
+max_error = 5.0
+
+for i in range(256):
+    num_ckpt += 1
+    print(format(resolutions) + "\t" + format(compute_ace(model_params, resolutions)))
+
+    ilower, _ = compute_complexity_impact(model_params, resolutions, exclusion_list)
+    
+    for elem in ilower:
+        old_res = copy.copy(resolutions)
+        resolutions[elem] = resolutions[elem] - 1
+
+    model_args = {
+        'A_quant': resolutions[0],
+        'B_quant': resolutions[1],
+        'C_quant': resolutions[2],
+        'dt_quant': 16,
+        'kernel_quant': 16,
+        'linear_quant': resolutions[3],
+        'act_quant': resolutions[5],
+        'coder_quant': resolutions[4]
+    }
+
+    acc = run_training(model_args, target_acc=vanilla_acc - max_error)
+    acc = 86.
+    if acc < vanilla_acc - max_error:
+        resolutions = copy.copy(old_res)
+        exclusion_list.append(elem)
