@@ -101,6 +101,7 @@ parser.add_argument('--dt_quant', default=None)
 parser.add_argument('--act_quant', default=None)
 parser.add_argument('--coder_quant', default=None)
 parser.add_argument('--all_quant', default=None)
+parser.add_argument('--state_quant', default=None)
 
 parser.add_argument('--check_path', default=None)
 
@@ -321,7 +322,8 @@ if args.all_quant is not None:
         'kernel_quant': args.all_quant,
         'linear_quant': args.all_quant,
         'act_quant': args.all_quant,
-        'coder_quant': args.all_quant
+        'coder_quant': args.all_quant,
+        'state_quant': args.all_quant
     }
 else:
     model_args = {
@@ -332,11 +334,12 @@ else:
         'kernel_quant': args.kernel_quant,
         'linear_quant': args.linear_quant,
         'act_quant': args.act_quant,
-        'coder_quant': args.coder_quant
+        'coder_quant': args.coder_quant,
+        'state_quant': args.state_quant
     }
 
 
-for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
+for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant']:
     if model_args[arg] == 'None':
         model_args[arg] = None
 
@@ -519,28 +522,11 @@ def eval(epoch, dataloader, checkpoint=False):
                 'epoch': epoch,
             }
             if args.check_path is None:
-                torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth') #_sub' + format(args.subsample) + '_batch' + format(args.batch_size) + '.pth')
+                torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
             else:
-                torch.save(state, './checkpoint/' + args.check_path + '/ckpt' + format(num_ckpt) + '.pth') #_sub' + format(args.subsample) + '_batch' + format(args.batch_size) + '.pth')
+                torch.save(state, './checkpoint/' + args.check_path + '/ckpt' + format(num_ckpt) + '.pth')
             
             best_acc = acc
-
-            if not os.path.isdir('checkpoint/layerstxt'):
-                os.mkdir('checkpoint/layerstxt')
-            for layer in state['model']:
-                    #print(layer)
-                    #print(state['model'][layer])
-                    save = state['model'][layer].cpu().numpy()
-                    if len(save.shape) < 3 and len(save.shape) > 0:
-                        np.savetxt('checkpoint/layerstxt/' + layer + '.vcsv', save, fmt='%5.4f')
-                    elif len(save.shape) == 3:
-                        for i in range(len(save[0, 0, :])):
-                            np.savetxt('checkpoint/layerstxt/' + layer + '_' + format(i) + '.vcsv', save[:, :, i], fmt='%5.4f')
-                    elif len(save.shape) == 4:
-                        for i in range(len(save[0, 0, 0, :])):
-                            np.savetxt('checkpoint/layerstxt/' + layer + '_' + format(i) + '.vcsv', save[0, :, :, i], fmt='%5.4f')
-
-
         return acc
 
 if args.energy:

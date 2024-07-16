@@ -73,6 +73,9 @@ class QuantizedLinear(Linear):
     
     def forward(self, input: Tensor) -> Tensor:
         return F.linear(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
+
+    def analysis(self):
+        return self.weight, self.quant_fn(self.weight, self.quant_levels)
     
 
 class BaseLinear(Linear):
@@ -81,6 +84,9 @@ class BaseLinear(Linear):
     
     def forward(self, input: Tensor) -> Tensor:
         return F.linear(input, self.weight, self.bias)
+    
+    def analysis(self):
+        return self.weight, self.weight # double export to match analysis of quantized layer
     
 
 from torch.nn.parameter import Parameter, UninitializedParameter
@@ -95,7 +101,7 @@ class Linear(Module):
     out_features: int
     weight: Tensor
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True,
+    def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
@@ -153,3 +159,9 @@ class QuantizedConv1d(torch.nn.Conv1d):
             return self._conv_forward(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
         else:
             return self._conv_forward(input, self.weight, self.bias)
+
+    def analysis(self):
+        if self.quant_levels is not None:
+            return self.weight, self.quant_fn(self.weight, self.quant_levels)
+        else:
+            return self.weight, self.weight

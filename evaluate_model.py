@@ -49,7 +49,7 @@ parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight dec
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
 parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
 # Dataloader
@@ -65,14 +65,20 @@ parser.add_argument('--resume', '-r', action='store_true', help='Resume from che
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
 parser.add_argument('--net', default="S4Model", type=str, help='which model class to use')
 parser.add_argument('--splitting_factor', type=int, default=1, help='Number of chunks to divide the initial samples')
-parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
+parser.add_argument('--gpu', type=int, default=[0], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
+
+parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
 
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
+parser.add_argument('--B_quant', default=None)
+parser.add_argument('--C_quant', default=None)
+parser.add_argument('--dt_quant', default=None)
 parser.add_argument('--act_quant', default=None)
 parser.add_argument('--coder_quant', default=None)
+parser.add_argument('--all_quant', default=None)
 
 parser.add_argument('--check_path', default=None)
 
@@ -284,77 +290,87 @@ def eval(model, dataloader):
     acc = 100.*correct/total
     return acc
 
-check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
+if args.check_path is None:
+    if args.dataset == 'cifar10':
+        check_point_test_path = './checkpoint/baseline_gr/ckpt0.pth'
+    elif args.dataset == 'pathfinder':
+        check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
+else:
+    check_point_test_path = './checkpoint/' + args.check_path
+
 checkpoint_test = torch.load(check_point_test_path)
 
-model_args = {
-    'A_quant': None,
-    'C_quant': None,
-    'dt_quant': None,
-    'kernel_quant': None,
-    'linear_quant': None,
-    'act_quant': None,
-    'coder_quant': None
-}
+if args.all_quant is not None:
+    model_args = {
+        'A_quant': args.all_quant,
+        'B_quant': args.all_quant,
+        'C_quant': args.all_quant,
+        'dt_quant': args.all_quant,
+        'kernel_quant': args.all_quant,
+        'linear_quant': args.all_quant,
+        'act_quant': args.all_quant,
+        'coder_quant': args.all_quant
+    }
+else:
+    model_args = {
+        'A_quant': args.A_quant,
+        'B_quant': args.B_quant,
+        'C_quant': args.C_quant,
+        'dt_quant': args.dt_quant,
+        'kernel_quant': args.kernel_quant,
+        'linear_quant': args.linear_quant,
+        'act_quant': args.act_quant,
+        'coder_quant': args.coder_quant
+    }
 
-model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
-model_test.load_state_dict(checkpoint_test['model'])
-base_acc = eval(model_test, testloader)
-print("Baseline accuracy:\t" + format(base_acc))
+for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
+    if model_args[arg] == 'None':
+        model_args[arg] = None
 
-test_range = [32, 16, 14, 12, *range(10, -1, -1)]
-parameters = ['A_quant', 'dt_quant', 'C_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant', 'all']
 
-max_len = max([len(x) for x in parameters])
-print("max len: " + format(max_len))
+def evaluate_model_weights(check_point, model_args, save_path=None):
+    model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
+    model_test.load_state_dict(check_point['model'])
+    base_acc = eval(model_test, testloader)
+    print("Test accuracy:\t" + format(base_acc))
 
-print("\t\t", end="")
-for quant in test_range:
-    print(format(quant) + "\t", end="")
+    if save_path is not None:
+        save_path = "./evaluation/quantization/analysis/" + save_path
+        try:
+            os.makedirs(save_path)
+        except FileExistsError:
+            pass
 
-file_path = "./evaluation/quantization/post-training/" + "parameterSweep" + "_max_path_S4D_6l_test"
-file = open(file_path, "w")
-for param in parameters: file.write(param + "\t")
-file.write("\n")
-for quant in test_range: file.write(format(quant) + "\t")
-file.write("\n")
-file.close()
+    num_bins = 20
+    
+    print("Encoder:")
+    np.savetxt(save_path + "/encoder_unquant.txt", model_test.encoder.analysis()[0].cpu().detach().numpy())
+    np.savetxt(save_path + "/encoder_quant.txt", model_test.encoder.analysis()[1].cpu().detach().numpy())
+    print(np.histogram(model_test.encoder.analysis()[1].cpu().detach().numpy(), bins=num_bins))
+    print("Decoder:")
+    np.savetxt(save_path + "/decoder_unquant.txt", model_test.decoder.analysis()[0].cpu().detach().numpy())
+    np.savetxt(save_path + "/decoder_quant.txt", model_test.decoder.analysis()[1].cpu().detach().numpy())
+    print(np.histogram(model_test.decoder.analysis()[1].cpu().detach().numpy(), bins=num_bins))
 
-### Parameter and quant accu sweep ####    
-for param in parameters:
-    print("\n" + param + "\t", end="")
-    for _ in range(max_len - len(param)):
-        print(" ", end="")
+    for ilayer, layer in enumerate(model_test.s4_layers):
+        print("S4 Layer " + format(ilayer))
+        print("\tkernel:")
+        kernel_analysis = layer.kernel.analysis()
 
-    file = open(file_path, "a+")
-
-    for quant in test_range:
-        model_args = {
-            'A_quant': None,
-            'kernel_quant': None,
-            'linear_quant': None,
-            'act_quant': None,
-            'coder_quant': None
-        }
-
-        for param in model_args:
-            model_args[param] = None
-
-        if not quant == 'float':
-            if not param == 'all':
-                model_args[param] = int(2**quant)
+        for i, param in enumerate(["A_real", "A_imag", "C", "dt"]):
+            print("\t\t" + param)
+            if param == "C":
+                np.savetxt(save_path + "/l" + format(ilayer) + "_" + param + "_unquant.txt", kernel_analysis[i][0].flatten().cpu().detach().numpy())
+                np.savetxt(save_path + "/l" + format(ilayer) + "_" + param + "_quant.txt", kernel_analysis[i][1].flatten().cpu().detach().numpy())
             else:
-                for elem in model_args:
-                    model_args[elem] = int(2**quant)
+                np.savetxt(save_path + "/l" + format(ilayer) + "_" + param + "_unquant.txt", kernel_analysis[i][0].cpu().detach().numpy())
+                np.savetxt(save_path + "/l" + format(ilayer) + "_" + param + "_quant.txt", kernel_analysis[i][1].cpu().detach().numpy())
+            print(np.histogram(kernel_analysis[i][1].cpu().detach().numpy()))
 
-        model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
-        model_test.load_state_dict(checkpoint_test['model'])
-        acc = eval(model_test, testloader)
-        print(format(acc) + "\t", end="")
-        file.write(format(acc) + "\t")
-    file.write("\n")
-    file.close()
-    print("\n")
-        #print(param + ":\t" + format(quant) + " bit\t:\t" + format(acc))
+        print("\tOutput linear:")
+        np.savetxt(save_path + "/l" + format(ilayer) + "_outlin_unquant.txt", layer.output_linear[0].analysis()[0].flatten().cpu().detach().numpy())
+        np.savetxt(save_path + "/l" + format(ilayer) + "_outlin_quant.txt", layer.output_linear[0].analysis()[1].flatten().cpu().detach().numpy())
+        print(np.histogram(layer.output_linear[0].analysis()[1].cpu().detach().numpy(), bins=num_bins))
 
 
+evaluate_model_weights(checkpoint_test, model_args, save_path=args.check_path)
