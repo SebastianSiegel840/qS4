@@ -312,7 +312,7 @@ print("\t\t", end="")
 for quant in test_range:
     print(format(quant) + "\t", end="")
 
-file_path = "./evaluation/quantization/post-training/" + "parameterSweep" + "_max_path_S4D_6l_test"
+file_path = "./evaluation/quantization/post-training/" + "parameterSweep" + "_max_path_S4D_6l"
 file = open(file_path, "w")
 for param in parameters: file.write(param + "\t")
 file.write("\n")

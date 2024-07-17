@@ -65,6 +65,7 @@ parser.add_argument('--name', type=str, default='example', help='wandb run name'
 parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
 parser.add_argument('--wb', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 parser.add_argument('--sw', dest='run_sweep', type=bool, default=False, help="Activate wb sweep run")
+
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
@@ -258,10 +259,7 @@ elif args.dataset == "hd":
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
-    ###### valset = PathFinderDataset(transform=transforms.ToTensor())
-    ###### testset = PathFinderDataset(transform=transforms.ToTensor())
 
-    ################ Added ################# Works! ###########################
     len_dataset = len(trainset)
 
     val_split = 0.1
@@ -276,7 +274,7 @@ elif args.dataset == "pathfinder":
              trainset,
              [train_len, val_len, test_len],
              generator=torch.Generator().manual_seed(42))
-    ############# Added #####################
+
     d_input = 1
     d_output = 2
 
@@ -324,13 +322,28 @@ if args.dataset == "pathfinder":
             valset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
     testloader = torch.utils.data.DataLoader(
             testset, batch_size=args.batch_size, shuffle=False, drop_last=True) ### shuffle true does not work
+
 else:
     trainloader = torch.utils.data.DataLoader(
-        trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
+        trainset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     valloader = torch.utils.data.DataLoader(
-        valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        valset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
     testloader = torch.utils.data.DataLoader(
-        testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+        testset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
+
+model_args = {
+    'A_quant': args.A_quant,
+    'B_quant': args.B_quant,
+    'C_quant': args.C_quant,
+    'dt_quant': args.dt_quant,
+    'kernel_quant': args.kernel_quant,
+    'linear_quant': args.linear_quant,
+    'act_quant': args.act_quant,
+    'coder_quant': args.coder_quant
+}
 
 if args.all_quant is not None:
     model_args = {
@@ -440,14 +453,9 @@ def setup_optimizer(model, lr, weight_decay, epochs):
 
 criterion = nn.CrossEntropyLoss()
 
-################### Changed ################## Under investigation ##################
-
 optimizer, scheduler = setup_optimizer(
     model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
 )
-#optimizer = torch.optim.Adam(model.parameters(),
-#                             lr=args.lr,
-#                             weight_decay=args.weight_decay) 
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
@@ -497,7 +505,6 @@ def train():
                 wandb.log({'loss': train_loss/(batch_idx+1), 
                            'acc': 100*correct/total})
 
-
 def eval(epoch, dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
@@ -523,11 +530,14 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
 
                 pbar.set_description(
                     'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
-                )
+                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
+                     100.*correct/total, correct, total))
             else:
                 checkpoint = False
                 acc = 0
+ 
+        wandb.log({'val_loss': eval_loss/(batch_idx+1), 
+                   'val_acc': 100*correct/total})
 
         if test:
             wandb.log({'test_loss': eval_loss/(batch_idx+1), 
