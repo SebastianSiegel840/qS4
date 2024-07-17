@@ -8,6 +8,7 @@ from collections import OrderedDict
 
 import torch.backends.cudnn as cudnn
 from tqdm.auto import tqdm
+from copy import deepcopy
 
 import precision_tools as pt
 
@@ -124,15 +125,17 @@ class S4Model(nn.Module):
         else:
             self.decoder = pt.BaseLinear(d_model, d_output)
 
-    def forward(self, x):
+    def forward(self, x, analysis=False):
         """
         Input x is shape (B, L, d_input)
         """
         #x = self.encoder(x.permute(0,2,1))  # (B, L, d_input) -> (B, L, d_model)
         x = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
         #if self.coder_quant is not None:
+        #y_encoder = deepcopy(x)
         #    x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
 
+        y_layers = []
         x = x.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
         for layer, norm, dropout in zip(self.s4_layers, self.norms, self.dropouts):
             # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
@@ -144,6 +147,7 @@ class S4Model(nn.Module):
 
             # Apply S4 block: we ignore the state input and output
             z, _ = layer(z)
+            #y_layers.append(deepcopy(z))
 
             # Dropout on the output of the S4 block
             z = dropout(z)
@@ -164,8 +168,10 @@ class S4Model(nn.Module):
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
         #if self.coder_quant is not None:
         #    x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
-
-        return x#.permute(0,2,1)
+        if analysis:
+            return x, y_encoder, y_layers#.permute(0,2,1)
+        else:
+            return x
 
 if __name__ == "__main__":
 

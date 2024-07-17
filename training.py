@@ -541,10 +541,13 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
 
         if test:
             wandb.log({'test_loss': eval_loss/(batch_idx+1), 
-                               'test_acc': 100*correct/total})
+                        'test_acc': 100*correct/total})
         else:
             wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                        'val_acc': 100*correct/total})
+    
+    if np.isnan(eval_loss):
+        exit()
                 
     # Save checkpoint.
     if checkpoint:
