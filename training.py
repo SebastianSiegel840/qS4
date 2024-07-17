@@ -63,7 +63,8 @@ else:
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, default='example', help='wandb run name')
 parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
-parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
+parser.add_argument('--wb', type=str, default='disabled', help='wandb mode: online, offline, disabled')
+parser.add_argument('--sw', dest='run_sweep', type=bool, default=False, help="Activate wb sweep run")
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
@@ -73,7 +74,7 @@ parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
 parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
-parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
+parser.add_argument('--subsample', default=1, type=int, help='specify subsampling ratio')
 # Dataloader
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
@@ -111,24 +112,42 @@ model_lib = __import__(parser_args.model_file)
 
 args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
 
-setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
+if not(args.run_sweep):
 
-device = torch.device('cuda:{}'.format(args.gpu[0]))
+    setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
-if args.energy:
-    from zeus.monitor import ZeusMonitor
-    monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
+    device = torch.device('cuda:{}'.format(args.gpu[0]))
+
+    if args.energy:
+        from zeus.monitor import ZeusMonitor
+        monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
+else:
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("\nCUDA enabled")
+    else:
+        device = torch.device("cpu")
+        print("\nCUDA not available")
+
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # create a wandb session 
-wandb_run = wandb.init(project=args.project,
-                        name=args.name,
-                        config=args,
-                        mode=args.wandb_status)
+if args.run_sweep:
+    wandb.init(  # name=args.name,
+        mode=args.wb,
+        config=args)
+
+    # config_wb = wandb.config
+else:
+    wandb.init(project=args.project,
+               name=args.name,
+               mode=args.wb,
+               config=args)
+
 # change args dictonary to a wandb config object and allow wandb to track it
-args = wandb_run.config  
+args = wandb.config 
 
 # Data
 print(f'==> Preparing {args.dataset} data..')
@@ -471,14 +490,15 @@ def train():
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            pbar.set_description(
-                'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-            wandb.log({'loss': train_loss/(batch_idx+1), 
-                       'acc': 100*correct/total})
+            if batch_idx % 10 == 0:
+                pbar.set_description(
+                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                    (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                wandb.log({'loss': train_loss/(batch_idx+1), 
+                           'acc': 100*correct/total})
 
 
-def eval(epoch, dataloader, checkpoint=False):
+def eval(epoch, dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
     eval_loss = 0
@@ -509,8 +529,12 @@ def eval(epoch, dataloader, checkpoint=False):
                 checkpoint = False
                 acc = 0
 
-                wandb.log({'val_loss': eval_loss/(batch_idx+1), 
-                   'val_acc': 100*correct/total})
+        if test:
+            wandb.log({'test_loss': eval_loss/(batch_idx+1), 
+                               'test_acc': 100*correct/total})
+        else:
+            wandb.log({'val_loss': eval_loss/(batch_idx+1), 
+                       'val_acc': 100*correct/total})
                 
     # Save checkpoint.
     if checkpoint:
@@ -535,10 +559,10 @@ if args.energy:
 pbar = tqdm(range(start_epoch, args.epochs))
 best_acc = 0
 for epoch in pbar:
-    if epoch == 0:
-        pbar.set_description('Epoch: %d' % (epoch))
-    else:
-        pbar.set_description('Epoch: %d | Val acc: %1.3f' % (epoch, val_acc))
+
+    print("Epoch", epoch)
+    wandb.log({'epoch': epoch})
+
     start = time.time()
     train()
     print("train time", time.time() - start)
@@ -546,8 +570,8 @@ for epoch in pbar:
     val_acc = eval(epoch, valloader, checkpoint=True)
     if val_acc > best_acc:
         best_acc = val_acc
-    print("Testing...")
-    eval(epoch, testloader)
+    print("\nTesting...")
+    eval(epoch, testloader, test=True)
     scheduler.step()
     print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
 

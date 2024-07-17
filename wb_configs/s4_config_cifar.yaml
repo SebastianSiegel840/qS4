@@ -1,0 +1,40 @@
+project: qSSm
+program: training.py
+method: random # bayes
+metric:
+  name: val_acc
+  goal: maximize
+parameters:
+  kernel_quant:
+    values: [2, 4, 8]
+  linear_quant:
+    values: [2, 4, 8]
+  A_quant:
+    values: [2, 4, 8]
+  B_quant:
+    values: [2, 4, 8]
+  C_quant:
+    values: [2, 4, 8]
+  dt_quant:
+    values: [2, 4, 8]
+  act_quant:
+    values: [2, 4, 8]
+  coder_quant:
+    values: [2, 4, 8]
+  all_quant:
+    values: [2, 4, 8]
+  state_quant:
+    values: [2, 4, 8]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--sw"
+  - True
+  - "--grayscale"
+  - "--dataset"
+  - cifar10 
+  - "--wb"
+  - online
+  - ${args}
