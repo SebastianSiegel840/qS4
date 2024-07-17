@@ -10,7 +10,7 @@ class PathFinderDataset(torch.utils.data.Dataset):
     # There's an empty file in the dataset
     blacklist = {"pathfinder32/curv_baseline/imgs/0/sample_172.png"}
 
-    def __init__(self, data_dir="/Data/pgi-15/datasets/lra_release/pathfinder32/",
+    def __init__(self, data_dir="/Local/ssiegel/pathfinder32/",
                 transform=None):
         """
         Args:

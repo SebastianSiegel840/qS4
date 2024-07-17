@@ -49,7 +49,7 @@ def max_quant_fn(a, quant_levels=2):
 
     # a * scale normalizes a. rounding brings them to the next integer. 
     # clamping to cut off values above the quantization limits. / scale to undo normalization
-    a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2, max=quant_levels // 2) / scale
+    a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2 + (quant_levels + 1)%2, max=quant_levels // 2) / scale
     return a_out
 
 # taken from bitnet 1.58b
@@ -61,6 +61,7 @@ def mean_quant_fn(w, quant_levels=2):
     # w * scale normalizes w. rounding brings them to the next integer. 
     # clamping to cut off values above the quantization limits. / scale to undo normalization
     w_out = (w * scale).round().clamp(-quant_levels // 2, quant_levels // 2) / scale
+    #w_out = (w * scale).round().clamp(-quant_levels // 2 + (quant_levels + 1)%2, quant_levels // 2) / scale
     return w_out
 
 
@@ -72,6 +73,9 @@ class QuantizedLinear(Linear):
     
     def forward(self, input: Tensor) -> Tensor:
         return F.linear(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
+
+    def analysis(self):
+        return self.weight, self.quant_fn(self.weight, self.quant_levels)
     
 
 class BaseLinear(Linear):
@@ -80,6 +84,9 @@ class BaseLinear(Linear):
     
     def forward(self, input: Tensor) -> Tensor:
         return F.linear(input, self.weight, self.bias)
+    
+    def analysis(self):
+        return self.weight, self.weight # double export to match analysis of quantized layer
     
 
 from torch.nn.parameter import Parameter, UninitializedParameter
@@ -94,7 +101,7 @@ class Linear(Module):
     out_features: int
     weight: Tensor
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True,
+    def __init__(self, in_features: int, out_features: int, bias: bool = False,
                  device=None, dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
@@ -152,3 +159,9 @@ class QuantizedConv1d(torch.nn.Conv1d):
             return self._conv_forward(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
         else:
             return self._conv_forward(input, self.weight, self.bias)
+
+    def analysis(self):
+        if self.quant_levels is not None:
+            return self.weight, self.quant_fn(self.weight, self.quant_levels)
+        else:
+            return self.weight, self.weight
