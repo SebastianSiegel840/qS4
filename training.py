@@ -80,9 +80,10 @@ parser.add_argument('--subsample', default=1, type=int, help='specify subsamplin
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
 # Model # SEE models/
-#parser.add_argument('--n_layers', default=4, type=int, help='Number of layers')
-#parser.add_argument('--d_model', default=128, type=int, help='Model dimension')
-#parser.add_argument('--dropout', default=0.1, type=float, help='Dropout')
+parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
+parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
+parser.add_argument('--d_state', default=64, type=int, help='State dimension')
+parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
 #parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
 parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
@@ -105,13 +106,34 @@ parser.add_argument('--coder_quant', default=None)
 parser.add_argument('--all_quant', default=None)
 parser.add_argument('--state_quant', default=None)
 
+parser.add_argument('--nonlin', default='glu')
+
+parser.add_argument('--debug', action='store_true')
+parser.add_argument('--hd_small', action='store_true')
+
 parser.add_argument('--check_path', default=None)
 
 parser_args = parser.parse_args()
 
+### Save manual model configs ###
+n_layers = parser_args.n_layers_m
+d_model = parser_args.d_model_m
+dropout = parser_args.dropout_m
+
 model_lib = __import__(parser_args.model_file)
 
 args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
+
+
+### Enter manual configs if present ###
+if n_layers is not None:
+    args.n_layers = n_layers
+if d_model is not None:
+    args.d_model = d_model
+if dropout is not None:
+    args.dropout = dropout
+
+
 
 if not(args.run_sweep):
 
@@ -227,6 +249,10 @@ elif args.dataset == 'mnist':
 
 elif args.dataset == "hd":
     #resampler = audio_T.Resample(48000, 1000)
+    if args.hd_small:
+        classes = ['0', '1']
+    else:
+        classes = None
     
     #transform = resampler
     transform_train = transform_test = None
@@ -236,24 +262,30 @@ elif args.dataset == "hd":
         subset="train", 
         language="english", 
         transform=transform_train,
-        subsample=args.subsample)
+        subsample=args.subsample,
+        classes=classes)
     print("Passed")
     valset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
         subset="train", 
         language="english", 
         transform=transform_test,
-        subsample=args.subsample)
+        subsample=args.subsample,
+        classes=classes)
 
     testset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
         subset="test", 
         language="english", 
         transform=transform_test,
-        subsample=args.subsample)
+        subsample=args.subsample,
+        classes=classes)
 
     d_input = 1
-    d_output = 10
+    if args.hd_small:
+        d_output = 2
+    else:
+        d_output = 10
     collate_fn = None
 
 elif args.dataset == "pathfinder":
@@ -342,7 +374,8 @@ model_args = {
     'kernel_quant': args.kernel_quant,
     'linear_quant': args.linear_quant,
     'act_quant': args.act_quant,
-    'coder_quant': args.coder_quant
+    'coder_quant': args.coder_quant,
+    'nonlin': args.nonlin
 }
 
 if args.all_quant is not None:
@@ -355,7 +388,8 @@ if args.all_quant is not None:
         'linear_quant': args.all_quant,
         'act_quant': args.all_quant,
         'coder_quant': args.all_quant,
-        'state_quant': args.all_quant
+        'state_quant': args.all_quant,
+        'nonlin': args.nonlin
     }
 else:
     model_args = {
@@ -367,7 +401,8 @@ else:
         'linear_quant': args.linear_quant,
         'act_quant': args.act_quant,
         'coder_quant': args.coder_quant,
-        'state_quant': args.state_quant
+        'state_quant': args.state_quant,
+        'nonlin': args.nonlin
     }
 
 
@@ -377,8 +412,13 @@ for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear
 
 # Model
 print('==> Building model..')
-model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
-
+if args.debug:
+    model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
+else:
+    try:
+        model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
+    except:
+        exit()
 ##############################################
 #### Save initial state ######################
 state = {
@@ -547,11 +587,31 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
                        'val_acc': 100*correct/total})
     
     if np.isnan(eval_loss):
-        exit()
+        return -1
                 
     # Save checkpoint.
     if checkpoint:
         acc = 100.*correct/total
+        checkname = ""
+        if args.all_quant is not None:
+            checkname = checkname + "all" + format(args.all_quant)
+        if args.A_quant is not None:
+            checkname = checkname + "A" + format(args.A_quant)
+        if args.B_quant is not None:
+            checkname = checkname + "B" + format(args.B_quant)
+        if args.C_quant is not None:
+            checkname = checkname + "C" + format(args.C_quant)
+        if args.dt_quant is not None:
+            checkname = checkname + "dt" + format(args.dt_quant)
+        if args.kernel_quant is not None:
+            checkname = checkname + "kernel" + format(args.kernel_quant)
+        if args.act_quant is not None:
+            checkname = checkname + "act" + format(args.act_quant)
+        if args.coder_quant is not None:
+            checkname = checkname + "coder" + format(args.coder_quant)
+        if args.state_quant is not None:
+            checkname = checkname + "state" + format(args.state_quant)
+
         if acc > best_acc:
             state = {
                 'model': model.state_dict(),
@@ -561,7 +621,7 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
             if args.check_path is None:
                 torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
             else:
-                torch.save(state, './checkpoint/' + args.check_path + '/ckpt' + format(num_ckpt) + '.pth')
+                torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + ' ' + format(num_ckpt) + '.pth')
             
             best_acc = acc
         return acc
@@ -581,6 +641,8 @@ for epoch in pbar:
     print("train time", time.time() - start)
     print("Validation...")
     val_acc = eval(epoch, valloader, checkpoint=True)
+    if val_acc == -1:
+        break
     if val_acc > best_acc:
         best_acc = val_acc
     print("\nTesting...")

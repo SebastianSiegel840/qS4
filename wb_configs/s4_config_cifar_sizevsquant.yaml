@@ -1,0 +1,32 @@
+project: qSSM
+program: training.py
+method: random #bayes
+metric:
+  name: val_acc
+  goal: maximize
+parameters:
+  A_quant:
+    values: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  act_quant:
+    values: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  state_quant:
+    values: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  d_model_m:
+    values: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  d_state:
+    values: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  n_layers_m:
+    values: [1, 2, 4, 6, 8, 10, 12, 16, 20]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--sw"
+  - True
+  - "--grayscale"
+  - "--dataset"
+  - cifar10 
+  - "--wb"
+  - online
+  - ${args}

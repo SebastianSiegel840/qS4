@@ -67,7 +67,7 @@ class return_args(object):
                 dropout = 0.0, #0.1 0.0
                 prenorm = 'store_true',
                 ) 
-        elif dataset == 'cifar10':
+        else:
             args = dict(
                 n_layers = 4, #4 6 
                 d_model = 128, #128 256
@@ -78,10 +78,11 @@ class return_args(object):
 
 class S4Model(nn.Module):
 
-    def __init__(self, params, d_input, d_output, **model_args):
+    def __init__(self, params, d_input, d_output, weight_noise=None, **model_args):
         super(S4Model, self).__init__()
 
         d_model = params['d_model']
+        d_state = params['d_state']
         n_layers = params['n_layers']
         dropout = params['dropout']
         lr = params['lr']
@@ -112,9 +113,9 @@ class S4Model(nn.Module):
                     S4(d_model, dropout=dropout, transposed=True, **model_args)  ## , lr=min(0.001, lr)
                 )
                 self.norms.append(nn.BatchNorm1d(1024))
-            elif dataset == 'cifar10':
+            else:
                 self.s4_layers.append(
-                    S4D(d_model, dropout=dropout, transposed=True, **model_args, lr=min(0.001, lr))
+                    S4D(d_model, d_state=d_state, dropout=dropout, transposed=True, weight_noise=weight_noise, **model_args, lr=min(0.001, lr))
                 )
                 self.norms.append(nn.LayerNorm(d_model))
             self.dropouts.append(dropout_fn(dropout))
@@ -132,8 +133,10 @@ class S4Model(nn.Module):
         #x = self.encoder(x.permute(0,2,1))  # (B, L, d_input) -> (B, L, d_model)
         x = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
         #if self.coder_quant is not None:
-        #y_encoder = deepcopy(x)
-        #    x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
+        if analysis:
+            y_encoder = deepcopy(x)
+            if self.coder_quant is not None:
+                x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
 
         y_layers = []
         x = x.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
@@ -147,7 +150,8 @@ class S4Model(nn.Module):
 
             # Apply S4 block: we ignore the state input and output
             z, _ = layer(z)
-            #y_layers.append(deepcopy(z))
+            if analysis:
+                y_layers.append(deepcopy(z))
 
             # Dropout on the output of the S4 block
             z = dropout(z)

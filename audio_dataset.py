@@ -8,7 +8,7 @@ from gsc import SPEECHCOMMANDS
 import os
 
 class HD(Dataset):
-    def __init__(self, path, transform=None, target_transform=None, language="english", subset="all", subsample=1):
+    def __init__(self, path, transform=None, target_transform=None, language="english", subset="all", subsample=1, classes=None):
         self.data_path = path + "/audio"
         self.transform = transform
         self.target_transform = target_transform
@@ -37,9 +37,12 @@ class HD(Dataset):
         else:
             self.sample_info = list(filter(lambda a: language in a, self.sample_info))
 
+        if classes is not None:
+            self.sample_info = list(filter(lambda a: any(a.endswith("-" + cl + ".flac") for cl in classes), self.sample_info))
+
         ### Find max sampe length ###
         
-        self.max_lenght = 6965
+        self.max_lenght = int(6965*8/self.subsample + 1)
         '''
         for sample_name in self.sample_info:
             sample, sample_rate = torchaudio.load(self.data_path + "/" + sample_name)
@@ -78,40 +81,6 @@ class HD(Dataset):
 
 #dataset = HD("./data/hd_audio", subset="test", language="english")
 #dataset.__getitem__(12)
-
-class HDold(Dataset):
-    def __init__(self, audio_dir, transform=None, target_transform=None, language="english"):
-        self.audio_dir = audio_dir
-        dirlist = os.listdir(self.audio_dir)
-        self.sample_info = []
-        self.classes = []
-        example_waveform, self.sample_rate = torchaudio.load(self.audio_dir + "/" + dirlist[0])
-        print("Length sample: " + format(len(example_waveform[0]) / self.sample_rate) + " s")
-        
-        for elem in os.listdir(self.audio_dir):
-            if language is not None:
-                if not language in elem:
-                    continue
-            if elem.endswith("flac"):
-                info = elem.replace(".flac", "")
-                self.sample_info.append(info)
-                self.classes.append(info.rsplit("-")[-1])
-
-        self.transform = transform
-        self.target_transform = target_transform
-
-    def __len__(self):
-        return len(self.sample_info)
-
-    def __getitem__(self, idx):
-        audio_path = os.path.join(self.audio_dir, self.sample_info[idx] + ".flac")
-        sample, sample_rate = torchaudio.load(audio_path)
-        label = self.classes[idx]
-        if self.transform:
-            sample = self.transform(sample)
-        if self.target_transform:
-            sample = self.target_transform(label)
-        return sample, label
     
 gsc_path = "/Data/pgi-15/datasets/GSC/"
 class SC(SPEECHCOMMANDS):

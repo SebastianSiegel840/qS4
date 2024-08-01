@@ -49,34 +49,37 @@ parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight dec
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
 parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
 # Dataloader
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
-parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
+parser.add_argument('--batch_size', default=1, type=int, help='Batch size')
 # Model # SEE models/
-parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
-parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
-parser.add_argument('--d_state', default=64, type=int, help='State dimension')
-parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
+#parser.add_argument('--n_layers', default=4, type=int, help='Number of layers')
+#parser.add_argument('--d_model', default=128, type=int, help='Model dimension')
+#parser.add_argument('--dropout', default=0.1, type=float, help='Dropout')
+#parser.add_argument('--prenorm', action='store_true', help='Prenorm')
+parser.add_argument('--d_state', default=64, type=int, help="state dimension")
 # General
 parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
 parser.add_argument('--net', default="S4Model", type=str, help='which model class to use')
 parser.add_argument('--splitting_factor', type=int, default=1, help='Number of chunks to divide the initial samples')
-parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
+parser.add_argument('--gpu', type=int, default=[0], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
+
+parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
 
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
+parser.add_argument('--B_quant', default=None)
+parser.add_argument('--C_quant', default=None)
+parser.add_argument('--dt_quant', default=None)
 parser.add_argument('--act_quant', default=None)
 parser.add_argument('--coder_quant', default=None)
-
-parser.add_argument('--nonlin', default='glu')
-
-parser.add_argument('--debug', action='store_true')
+parser.add_argument('--all_quant', default=None)
 
 parser.add_argument('--check_path', default=None)
 
@@ -266,119 +269,107 @@ if device == 'cuda':
 # initialize model and test
 ###############################################################################
 
-if args.dataset == 'cifar10':
-    check_point_test_path = './checkpoint/baseline_gr/ 2.pth'
-    file_name = "parameterSweep" + "_max_gr_S4D"
-elif args.dataset == 'hd':
-    if args.n_layers_m == None:
-        check_point_test_path = './checkpoint/baseline_hd/ 5.pth'
-        file_name = "parameterSweep" + "_max_hd_S4D"
-    elif args.n_layers_m == 1:
-        check_point_test_path = './checkpoint/baseline_hd_1l/ckpt0.pth'
-        file_name = "parameterSweep" + "_max_hd_S4D_1l"
-elif args.dataset == 'pathfinder':
-    check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
-    file_name = "parameterSweep" + "_max_path_S4D_6l"
-
-def eval(model, dataloader):
+def eval(model, dataloader, save_path=None, num_batches=None, quant=True):
     global best_acc
     model.eval()
     correct = 0
     total = 0
+
+    if save_path is not None:
+        save_path = "./evaluation/quantization/analysis/" + save_path
+        try:
+            os.makedirs(save_path)
+        except FileExistsError:
+            pass
+    
+    if quant:
+        file_encoder = open(save_path + "/act_encoder_quant.txt", "w")
+        file_decoder = open(save_path + "/act_decoder_quant.txt", "w")
+    else:
+        file_encoder = open(save_path + "/act_encoder_unquant.txt", "w")
+        file_decoder = open(save_path + "/act_decoder_unquant.txt", "w")
+    
+    file_layers = []
+    for i in range(len(model.s4_layers)):
+        if quant:
+            file_layers.append(open(save_path + "/act_l" + format(i) + "_quant.txt", "w"))
+        else:
+            file_layers.append(open(save_path + "/act_l" + format(i) + "_unquant.txt", "w"))
+
+
     with torch.no_grad():
         pbar = tqdm(enumerate(dataloader), disable=True)
         for batch_idx, (inputs, targets) in pbar:
+            if num_batches is not None and batch_idx >= num_batches:
+                break
+
             inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
+            outputs, y_encoder, y_layers = model(inputs, analysis=True)
             
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            #pbar.set_description(
-            #    'Batch Idx: (%d/%d) | Acc: %.3f%% (%d/%d)' %
-            #    (batch_idx, len(dataloader), 100.*correct/total, correct, total)
-            #)
-    acc = 100.*correct/total
+            np.savetxt(file_encoder, y_encoder.flatten().cpu().detach().numpy())
+            np.savetxt(file_decoder, outputs.flatten().cpu().detach().numpy())
+
+            for i, layer in enumerate(y_layers):
+                np.savetxt(file_layers[i], layer.flatten().cpu().detach().numpy())
+            acc = 100.*correct/total
     return acc
 
+if args.check_path is None:
+    if args.dataset == 'cifar10':
+        check_point_test_path = './checkpoint/baseline_gr/ckpt0.pth'
+        save_path = 'baseline_gr/ckpt0.pth'
+    elif args.dataset == 'pathfinder':
+        check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
+        save_path = 'baseline_S4D_path_6l/ckpt0.pth'
+else:
+    check_point_test_path = './checkpoint/' + args.check_path
+    save_path = args.check_path
 
 checkpoint_test = torch.load(check_point_test_path)
 
-model_args = {
-    'A_quant': None,
-    'C_quant': None,
-    'dt_quant': None,
-    'linear_quant': None,
-    'act_quant': None,
-    'coder_quant': None,
-    'state_quant': None,
-    'nonlin': args.nonlin
-}
+if args.all_quant is not None:
+    model_args = {
+        'A_quant': args.all_quant,
+        'B_quant': args.all_quant,
+        'C_quant': args.all_quant,
+        'dt_quant': args.all_quant,
+        'kernel_quant': args.all_quant,
+        'linear_quant': args.all_quant,
+        'act_quant': args.all_quant,
+        'coder_quant': args.all_quant
+    }
+else:
+    model_args = {
+        'A_quant': args.A_quant,
+        'B_quant': args.B_quant,
+        'C_quant': args.C_quant,
+        'dt_quant': args.dt_quant,
+        'kernel_quant': args.kernel_quant,
+        'linear_quant': args.linear_quant,
+        'act_quant': args.act_quant,
+        'coder_quant': args.coder_quant
+    }
 
-model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
-model_test.load_state_dict(checkpoint_test['model'])
-base_acc = eval(model_test, testloader)
-print("Baseline accuracy:\t" + format(base_acc))
-
-test_range = [32, 16, 14, 12, *range(10, -1, -1)]
-parameters = ['A_quant', 'dt_quant', 'C_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant', 'all']
-
-max_len = max([len(x) for x in parameters])
-print("max len: " + format(max_len))
-
-print("\t\t", end="")
-for quant in test_range:
-    print(format(quant) + "\t", end="")
-
-file_path = "./evaluation/quantization/post-training/" + file_name
-file = open(file_path, "w")
-for param in parameters: file.write(param + "\t")
-file.write("\n")
-for quant in test_range: file.write(format(quant) + "\t")
-file.write("\n")
-file.close()
-
-### Parameter and quant accu sweep ####    
-for param in parameters:
-    if param == 'nonlin':
-        continue
-    print("\n" + param + "\t", end="")
-    for _ in range(max_len - len(param)):
-        print(" ", end="")
-
-    file = open(file_path, "a+")
-
-    for quant in test_range:
-        model_args = {
-            'A_quant': None,
-            'C_quant': None,
-            'dt_quant': None,
-            'linear_quant': None,
-            'act_quant': None,
-            'coder_quant': None,
-            'state_quant': None,
-            'nonlin': args.nonlin
-        }
-
-        #for param in model_args:
-        #    model_args[param] = None
-
-        if not quant == 'float':
-            if not param == 'all':
-                model_args[param] = int(2**quant)
-            else:
-                for elem in model_args:
-                    model_args[elem] = int(2**quant)
-
-        model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
-        model_test.load_state_dict(checkpoint_test['model'])
-        acc = eval(model_test, testloader)
-        print(format(acc) + "\t", end="")
-        file.write(format(acc) + "\t")
-    file.write("\n")
-    file.close()
-    print("\n")
-        #print(param + ":\t" + format(quant) + " bit\t:\t" + format(acc))
+for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant']:
+    if model_args[arg] == 'None':
+        model_args[arg] = None
 
 
+def evaluate_model_activations(check_point, model_args, save_path=None, num_batches=None):
+    ### Run quantized act model
+    model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
+    model_test.load_state_dict(check_point['model'])
+    base_acc = eval(model_test, testloader, save_path=save_path, num_batches=num_batches, quant=True)
+
+    ### Run unquantized act model
+    model_args['act_quant'] = None
+    model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
+    model_test.load_state_dict(check_point['model'])
+    base_acc = eval(model_test, testloader, save_path=save_path, num_batches=num_batches, quant=False)
+
+
+evaluate_model_activations(checkpoint_test, model_args, save_path=save_path, num_batches=1)
