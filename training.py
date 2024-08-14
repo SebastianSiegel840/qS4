@@ -73,7 +73,7 @@ parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight dec
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder', 'sc'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
 parser.add_argument('--subsample', default=1, type=int, help='specify subsampling ratio')
 # Dataloader
@@ -288,6 +288,33 @@ elif args.dataset == "hd":
         d_output = 10
     collate_fn = None
 
+elif args.dataset == "sc":
+    gsc_path = "/Data/pgi-15/datasets/GSC/"
+
+    transform_train = transform_test = None
+    datapath = "/Users/ssiegel/datasets"
+    trainset = audio_dataset.SC(
+        path=gsc_path, 
+        subset="training",
+        transform=transform_train,
+        subsample=args.subsample)
+    print("Passed")
+    valset = audio_dataset.SC(
+        path=gsc_path, 
+        subset="validation", 
+        transform=transform_test,
+        subsample=args.subsample)
+
+    testset = audio_dataset.SC(
+        path=gsc_path, 
+        subset="testing", 
+        transform=transform_test,
+        subsample=args.subsample)
+
+    d_input = 1
+    d_output = 36
+    collate_fn = None
+
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
@@ -409,6 +436,26 @@ else:
 for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant']:
     if model_args[arg] == 'None':
         model_args[arg] = None
+
+checkname = ""
+if args.all_quant is not None:
+    checkname = checkname + "all" + format(args.all_quant)
+if args.A_quant is not None:
+    checkname = checkname + "A" + format(args.A_quant)
+if args.B_quant is not None:
+    checkname = checkname + "B" + format(args.B_quant)
+if args.C_quant is not None:
+    checkname = checkname + "C" + format(args.C_quant)
+if args.dt_quant is not None:
+    checkname = checkname + "dt" + format(args.dt_quant)
+if args.kernel_quant is not None:
+    checkname = checkname + "kernel" + format(args.kernel_quant)
+if args.act_quant is not None:
+    checkname = checkname + "act" + format(args.act_quant)
+if args.coder_quant is not None:
+    checkname = checkname + "coder" + format(args.coder_quant)
+if args.state_quant is not None:
+    checkname = checkname + "state" + format(args.state_quant)
 
 # Model
 print('==> Building model..')
@@ -592,26 +639,6 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
     # Save checkpoint.
     if checkpoint:
         acc = 100.*correct/total
-        checkname = ""
-        if args.all_quant is not None:
-            checkname = checkname + "all" + format(args.all_quant)
-        if args.A_quant is not None:
-            checkname = checkname + "A" + format(args.A_quant)
-        if args.B_quant is not None:
-            checkname = checkname + "B" + format(args.B_quant)
-        if args.C_quant is not None:
-            checkname = checkname + "C" + format(args.C_quant)
-        if args.dt_quant is not None:
-            checkname = checkname + "dt" + format(args.dt_quant)
-        if args.kernel_quant is not None:
-            checkname = checkname + "kernel" + format(args.kernel_quant)
-        if args.act_quant is not None:
-            checkname = checkname + "act" + format(args.act_quant)
-        if args.coder_quant is not None:
-            checkname = checkname + "coder" + format(args.coder_quant)
-        if args.state_quant is not None:
-            checkname = checkname + "state" + format(args.state_quant)
-
         if acc > best_acc:
             state = {
                 'model': model.state_dict(),
@@ -653,7 +680,7 @@ for epoch in pbar:
 if args.check_path is not None:
     file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
     if args.all_quant is not None:
-        file.write("all\t" + format(args.all_quant) + "\t" + format(best_acc) + "\n")
+        file.write("all\t" + checkname + " " + format(num_ckpt) + "\t" + format(best_acc) + "\n")
         file.close()
         exit()
     else:

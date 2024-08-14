@@ -1,8 +1,11 @@
+from typing import Tuple
 import torchaudio
 import os
 from torch.utils.data import Dataset
 import torch
 import torchaudio.transforms as T
+
+import numpy as np
 
 from gsc import SPEECHCOMMANDS
 import os
@@ -84,8 +87,12 @@ class HD(Dataset):
     
 gsc_path = "/Data/pgi-15/datasets/GSC/"
 class SC(SPEECHCOMMANDS):
-    def __init__(self, subset: str = None):
-        super().__init__(gsc_path, download=False)
+    def __init__(self, path, subset: str = None, transform=None, subsample=1):
+        super().__init__(path, download=False)
+        self.transform = transform
+        self.subsample = subsample
+
+        self.max_length = int(16000 / subsample)
 
         def load_list(filename):
             filepath = os.path.join(self._path, filename)
@@ -100,3 +107,36 @@ class SC(SPEECHCOMMANDS):
             excludes = load_list("validation_list.txt") + load_list("testing_list.txt")
             excludes = set(excludes)
             self._walker = [w for w in self._walker if w not in excludes]
+
+    def __getitem__(self, n: int):
+        sample, _, _, _, label = super().__getitem__(n)
+
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        sample = sample[:, ::self.subsample]
+
+        sample_res = torch.zeros((self.max_length, 1))
+        sample_res[0:sample.shape[1], 0] = sample[0, :]
+
+        max_abs = torch.max(torch.abs(sample))
+        sample_res = sample_res / max_abs
+
+        return sample_res, label
+
+datapath = "/Users/ssiegel/datasets"
+
+
+def export_to_numpy(dataset, folder):
+    if not os.path.isdir(folder):
+        os.mkdir(folder)
+    for i in range(len(dataset)):
+        item = dataset.__getitem__(i)
+        np.save(folder + "/" + format(i) + "_raw_" + format(item[1]) + ".npy", item[0].numpy())
+
+
+if __name__ == "__main__":
+    dataset = HD(path=datapath + "/hd_audio", subset="test", language="english", classes=['0', '1'], subsample=64)
+    export_folder = "/Users/ssiegel/datasets/hd_small_export"
+
+    export_to_numpy(dataset, export_folder)

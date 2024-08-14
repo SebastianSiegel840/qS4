@@ -82,9 +82,22 @@ parser.add_argument('--check_path', default=None)
 
 parser_args = parser.parse_args()
 
+### Save manual model configs ###
+n_layers = parser_args.n_layers_m
+d_model = parser_args.d_model_m
+dropout = parser_args.dropout_m
+
 model_lib = __import__(parser_args.model_file)
 
 args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
+
+### Enter manual configs if present ###
+if n_layers is not None:
+    args.n_layers = n_layers
+if d_model is not None:
+    args.d_model = d_model
+if dropout is not None:
+    args.dropout = dropout
 
 setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
@@ -274,10 +287,10 @@ elif args.dataset == 'hd':
         check_point_test_path = './checkpoint/baseline_hd/ 5.pth'
         file_name = "parameterSweep" + "_max_hd_S4D"
     elif args.n_layers_m == 1:
-        check_point_test_path = './checkpoint/baseline_hd_1l/ckpt0.pth'
+        check_point_test_path = './checkpoint/baseline_hd_1layer/ckpt0.pth'
         file_name = "parameterSweep" + "_max_hd_S4D_1l"
 elif args.dataset == 'pathfinder':
-    check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
+    check_point_test_path = './checkpoint/baseline_path/ 4.pth'
     file_name = "parameterSweep" + "_max_path_S4D_6l"
 
 def eval(model, dataloader):
@@ -307,6 +320,7 @@ checkpoint_test = torch.load(check_point_test_path)
 
 model_args = {
     'A_quant': None,
+    'B_quant': None,
     'C_quant': None,
     'dt_quant': None,
     'linear_quant': None,
@@ -323,6 +337,8 @@ print("Baseline accuracy:\t" + format(base_acc))
 
 test_range = [32, 16, 14, 12, *range(10, -1, -1)]
 parameters = ['A_quant', 'dt_quant', 'C_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant', 'all']
+if args.dataset == "pathfinder":
+    parameters.append("B_quant")
 
 max_len = max([len(x) for x in parameters])
 print("max len: " + format(max_len))
@@ -352,6 +368,7 @@ for param in parameters:
     for quant in test_range:
         model_args = {
             'A_quant': None,
+            'B_quant': None,
             'C_quant': None,
             'dt_quant': None,
             'linear_quant': None,

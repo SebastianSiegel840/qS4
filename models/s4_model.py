@@ -162,7 +162,7 @@ class S4Model(nn.Module):
             if not self.prenorm:
                 # Postnorm
                 x = norm(x.transpose(-1, -2)).transpose(-1, -2)
-
+        
         x = x.transpose(-1, -2)
 
         # Pooling: average pooling over the sequence length
