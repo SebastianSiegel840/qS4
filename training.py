@@ -37,13 +37,18 @@ import argparse
 import time
 import wandb
 import numpy as np
+import sys
 
 from tqdm.auto import tqdm
     
 import audio_dataset
-#from audio_dataloader_split_samples import DNSAudio
 
-import sys
+from os.path import expanduser
+home = expanduser("~")
+path_s4 = os.path.join(home, 'state-spaces')
+sys.path.append(path_s4)
+from src.dataloaders import lra
+
 sys.path.append("models")
 
 print("Modules load!")
@@ -71,9 +76,9 @@ parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
 parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
 # Scheduler
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
-parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
+parser.add_argument('--epochs', default=200, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder', 'sc'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='text', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder', 'sc', 'list', 'text'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
 parser.add_argument('--subsample', default=1, type=int, help='specify subsampling ratio')
 # Dataloader
@@ -84,7 +89,7 @@ parser.add_argument('--n_layers_m', default=None, type=int, help='Number of laye
 parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
 parser.add_argument('--d_state', default=64, type=int, help='State dimension')
 parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
-#parser.add_argument('--prenorm', action='store_true', help='Prenorm')
+parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
 parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
@@ -94,7 +99,7 @@ parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', 
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
 parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
-
+# Quantization
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
@@ -107,9 +112,16 @@ parser.add_argument('--all_quant', default=None)
 parser.add_argument('--state_quant', default=None)
 
 parser.add_argument('--nonlin', default='glu')
+parser.add_argument('--model', default=None)
+parser.add_argument('--mode', default=None)
+parser.add_argument('--measure', default=None)
 
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--hd_small', action='store_true')
+
+parser.add_argument('--defmax', default=None)
+parser.add_argument('--defmax_train', action='store_true')
+parser.add_argument('--weight_noise', default=None, type=float, help='Weight noise std')
 
 parser.add_argument('--check_path', default=None)
 
@@ -119,11 +131,11 @@ parser_args = parser.parse_args()
 n_layers = parser_args.n_layers_m
 d_model = parser_args.d_model_m
 dropout = parser_args.dropout_m
+prenorm = parser_args.prenorm
 
 model_lib = __import__(parser_args.model_file)
 
 args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
-
 
 ### Enter manual configs if present ###
 if n_layers is not None:
@@ -267,7 +279,7 @@ elif args.dataset == "hd":
     print("Passed")
     valset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
-        subset="train", 
+        subset="test", 
         language="english", 
         transform=transform_test,
         subsample=args.subsample,
@@ -354,7 +366,33 @@ elif args.dataset == "dn": # denoising task
 
         #return torch.stack(noisy), torch.stack(clean), torch.stack(noise)
         return torch.stack(noisy), torch.stack(clean)
+    
+elif args.dataset == "list": # ListOps of LRA
+    d_input = 1
+    d_output = 10
 
+    dataset = lra.ListOps("listops", data_dir="/Local/ssiegel/datasets/lra_release/listops-1000")
+    dataset.setup()
+    trainset = dataset.dataset_train
+    valset = dataset.dataset_val
+    testset = dataset.dataset_test
+    
+    collate_fn = dataset._collate_fn
+
+elif args.dataset == "text": # ListOps of LRA
+    d_input = 1
+    d_output = 2
+
+    dataset = lra.IMDB("imdb")
+    dataset.setup()
+    trainset = dataset.dataset_train
+    valset = dataset.dataset_train
+    testset = dataset.dataset_train
+
+    #import pdb
+    #pdb.set_trace()
+    
+    collate_fn = dataset._collate_fn
 
 else: raise NotImplementedError
 
@@ -416,7 +454,9 @@ if args.all_quant is not None:
         'act_quant': args.all_quant,
         'coder_quant': args.all_quant,
         'state_quant': args.all_quant,
-        'nonlin': args.nonlin
+        'nonlin': args.nonlin,
+        'defmax': args.defmax,
+        'defmax_train': args.defmax_train
     }
 else:
     model_args = {
@@ -429,7 +469,9 @@ else:
         'act_quant': args.act_quant,
         'coder_quant': args.coder_quant,
         'state_quant': args.state_quant,
-        'nonlin': args.nonlin
+        'nonlin': args.nonlin,
+        'defmax': args.defmax,
+        'defmax_train': args.defmax_train
     }
 
 
@@ -456,20 +498,26 @@ if args.coder_quant is not None:
     checkname = checkname + "coder" + format(args.coder_quant)
 if args.state_quant is not None:
     checkname = checkname + "state" + format(args.state_quant)
+if args.weight_noise is not None:
+    checkname = checkname + "weight_noise" + format(args.weight_noise)
+
+if checkname == "":
+    checkname = "baseline"
 
 # Model
 print('==> Building model..')
 if args.debug:
-    model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
+    model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args, weight_noise=args.weight_noise).to(device)
 else:
     try:
-        model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
+        model = getattr(model_lib, args.net)(args, d_input, d_output, **model_args, weight_noise=args.weight_noise).to(device) # Please ensure that your model takes arguments (args, dim_in, dim_out) with args a class object with network config., model_args=model_args
     except:
         exit()
 ##############################################
 #### Save initial state ######################
 state = {
     'model': model.state_dict(),
+    'args': args,
 }
 
 if not os.path.isdir('checkpoint'):
@@ -567,7 +615,16 @@ def train():
     correct = 0
     total = 0
     pbar = tqdm(enumerate(trainloader))
-    for batch_idx, (inputs, targets) in pbar:
+    
+    #for batch_idx, (inputs, targets) in pbar:
+    for batch_idx, elem in pbar:
+        if args.dataset in ['list', 'text']:
+            inputs, targets, _ = elem
+            inputs = inputs.float()[:, :, None]
+            targets = targets#.int()
+        else:
+            inputs, targets = elem
+
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         if args.dataset == 'dn':
@@ -600,7 +657,13 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
     total = 0
     with torch.no_grad():
         pbar = tqdm(enumerate(dataloader))
-        for batch_idx, (inputs, targets) in pbar:
+        for batch_idx, elem in pbar:
+            if args.dataset in ['list', 'text']:
+                inputs, targets, _ = elem
+                inputs = inputs.float()[:, :, None]
+                targets = targets#.int()
+            else:
+                inputs, targets = elem
             inputs, targets = inputs.to(device), targets.to(device)
             if args.dataset == 'dn':
                 inputs = inputs.unsqueeze(2)
@@ -635,10 +698,11 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
     
     if np.isnan(eval_loss):
         return -1
-                
+
+    acc = 100.*correct/total  
     # Save checkpoint.
     if checkpoint:
-        acc = 100.*correct/total
+        
         if acc > best_acc:
             state = {
                 'model': model.state_dict(),
@@ -648,10 +712,10 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
             if args.check_path is None:
                 torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
             else:
-                torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + ' ' + format(num_ckpt) + '.pth')
+                torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '.pth') #' ' + format(num_ckpt) + '.pth')
             
             best_acc = acc
-        return acc
+    return acc
 
 if args.energy:
     monitor.begin_window("training")
@@ -678,6 +742,17 @@ for epoch in pbar:
     print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
 
 if args.check_path is not None:
+    if True:
+        state = {
+                'model': model.state_dict(),
+                'acc': val_acc,
+                'epoch': epoch,
+            }
+        #if args.check_path is None:
+        #    torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
+        #else:
+        #    torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '_last.pth')
+
     file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
     if args.all_quant is not None:
         file.write("all\t" + checkname + " " + format(num_ckpt) + "\t" + format(best_acc) + "\n")

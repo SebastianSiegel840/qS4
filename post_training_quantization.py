@@ -39,19 +39,21 @@ else:
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--name', type=str, default='test', help='wandb run name')
-parser.add_argument('--project', type=str, default='test', help='wandb project name')
-parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
+parser.add_argument('--name', type=str, default='example', help='wandb run name')
+parser.add_argument('--project', type=str, default='quant SSM', help='wandb project name')
+parser.add_argument('--wb', type=str, default='disabled', help='wandb mode: online, offline, disabled')
+parser.add_argument('--sw', dest='run_sweep', type=bool, default=False, help="Activate wb sweep run")
+
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
-parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight decay')
+parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
 # Scheduler
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
-parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
+parser.add_argument('--epochs', default=200, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='text', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder', 'sc', 'list', 'text'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
-parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
+parser.add_argument('--subsample', default=1, type=int, help='specify subsampling ratio')
 # Dataloader
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
@@ -60,6 +62,7 @@ parser.add_argument('--n_layers_m', default=None, type=int, help='Number of laye
 parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
 parser.add_argument('--d_state', default=64, type=int, help='State dimension')
 parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
+parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
 parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
@@ -68,15 +71,27 @@ parser.add_argument('--splitting_factor', type=int, default=1, help='Number of c
 parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
+parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
+# Quantization
 parser.add_argument('--kernel_quant', default=None)
 parser.add_argument('--linear_quant', default=None)
 parser.add_argument('--A_quant', default=None)
+parser.add_argument('--B_quant', default=None)
+parser.add_argument('--C_quant', default=None)
+parser.add_argument('--dt_quant', default=None)
 parser.add_argument('--act_quant', default=None)
 parser.add_argument('--coder_quant', default=None)
+parser.add_argument('--all_quant', default=None)
+parser.add_argument('--state_quant', default=None)
 
 parser.add_argument('--nonlin', default='glu')
 
 parser.add_argument('--debug', action='store_true')
+parser.add_argument('--hd_small', action='store_true')
+
+parser.add_argument('--defmax', default=None)
+parser.add_argument('--defmax_train', action='store_true')
+parser.add_argument('--weight_noise', default=None, type=float, help='Weight noise std')
 
 parser.add_argument('--check_path', default=None)
 
@@ -86,6 +101,7 @@ parser_args = parser.parse_args()
 n_layers = parser_args.n_layers_m
 d_model = parser_args.d_model_m
 dropout = parser_args.dropout_m
+prenorm = parser_args.prenorm
 
 model_lib = __import__(parser_args.model_file)
 
@@ -99,19 +115,44 @@ if d_model is not None:
 if dropout is not None:
     args.dropout = dropout
 
-setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
-device = torch.device('cuda:{}'.format(args.gpu[0]))
+
+if not(args.run_sweep):
+
+    setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
+
+    device = torch.device('cuda:{}'.format(args.gpu[0]))
+
+    if args.energy:
+        from zeus.monitor import ZeusMonitor
+        monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
+else:
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("\nCUDA enabled")
+    else:
+        device = torch.device("cpu")
+        print("\nCUDA not available")
+
+
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # create a wandb session 
-wandb_run = wandb.init(project=args.project,
-                        name=args.name,
-                        config=args,
-                        mode=args.wandb_status)
+if args.run_sweep:
+    wandb.init(  # name=args.name,
+        mode=args.wb,
+        config=args)
+
+    # config_wb = wandb.config
+else:
+    wandb.init(project=args.project,
+               name=args.name,
+               mode=args.wb,
+               config=args)
+
 # change args dictonary to a wandb config object and allow wandb to track it
-args = wandb_run.config  
+args = wandb.config 
 
 # Data
 print(f'==> Preparing {args.dataset} data..')
@@ -205,7 +246,7 @@ elif args.dataset == "hd":
     
     #transform = resampler
     transform_train = transform_test = None
-    datapath = "/Users/ssiegel/datasets"
+    datapath = "/Data/pgi-14/ssiegel/datasets"
     trainset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
         subset="train", 
@@ -280,8 +321,10 @@ if device == 'cuda':
 ###############################################################################
 
 if args.dataset == 'cifar10':
-    check_point_test_path = './checkpoint/baseline_gr/ 2.pth'
-    file_name = "parameterSweep" + "_max_gr_S4D"
+    #check_point_test_path = './checkpoint/baseline_gr/baseline.pth'
+    #file_name = "parameterSweep" + "_max_gr_S4D"
+    check_point_test_path = './checkpoint/baseline_gr_S4legs/baseline.pth'
+    file_name = "parameterSweep" + "_max_gr_S4legs"
 elif args.dataset == 'hd':
     if args.n_layers_m == None:
         check_point_test_path = './checkpoint/baseline_hd/ 5.pth'
@@ -332,10 +375,10 @@ model_args = {
 
 model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args).to(device)
 model_test.load_state_dict(checkpoint_test['model'])
-base_acc = eval(model_test, testloader)
+base_acc = checkpoint_test['acc']
 print("Baseline accuracy:\t" + format(base_acc))
 
-test_range = [32, 16, 14, 12, *range(10, -1, -1)]
+test_range = [None, 32, 16, 14, 12, *range(10, -1, -1)]
 parameters = ['A_quant', 'dt_quant', 'C_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant', 'all']
 if args.dataset == "pathfinder":
     parameters.append("B_quant")
@@ -381,7 +424,7 @@ for param in parameters:
         #for param in model_args:
         #    model_args[param] = None
 
-        if not quant == 'float':
+        if not quant == None:
             if not param == 'all':
                 model_args[param] = int(2**quant)
             else:

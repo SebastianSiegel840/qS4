@@ -57,15 +57,59 @@ class return_args(object):
             args = dict(
                 n_layers = 6, #4 6 
                 d_model = 256, #128 256
+                d_state = 64,
                 dropout = 0.0, #0.1 0.0
                 prenorm = 'store_true',
+                norm_fn = 'layer',
+                weight_decay = 0.05,
+                epochs = 100,
+                batch_size = 64
                 )   
         elif dataset == 'pathfinder':
             args = dict(
                 n_layers = 6, #4 6 
                 d_model = 256, #128 256
+                d_state = 64,
                 dropout = 0.0, #0.1 0.0
                 prenorm = 'store_true',
+                norm_fn = 'batch',
+                epochs = 200,
+                batch_size = 64,
+                weight_decay = 0.05
+                ) 
+        elif dataset == 'cifar10':
+            args = dict(
+                n_layers = 4, #4 6 
+                d_model = 128, #128 256
+                d_state = 128,
+                dropout = 0.1, #0.1 0.0
+                prenorm = 'store_false',
+                norm_fn = 'layer',
+                epochs = 200,
+                batch_size = 64,
+                weight_decay = 0.05
+                ) 
+        elif dataset == 'text':
+            args = dict(
+                n_layers = 6, #4 6 
+                d_model = 256, #128 256
+                dropout = 0.0, #0.1 0.0
+                prenorm = 'store_true',
+                norm_fn = 'batch',
+                batch_size = 16,
+                epochs = 32,
+                weight_decay = 0.05
+                ) 
+        elif dataset == 'list':
+            args = dict(
+                n_layers = 8, #4 6 
+                d_model = 128, #128 256
+                dropout = 0.0, #0.1 0.0
+                prenorm = 'store_false',
+                norm_fn = 'batch',
+                batch_size = 50,
+                epochs = 50,
+                weight_decay = 0.05
                 ) 
         else:
             args = dict(
@@ -73,6 +117,10 @@ class return_args(object):
                 d_model = 128, #128 256
                 dropout = 0.1, #0.1 0.0
                 prenorm = 'store_true',
+                norm_fn = 'layer',
+                weight_decay = 0.05,
+                epochs = 100,
+                batch_size = 64
                 ) 
         return args        
 
@@ -88,13 +136,20 @@ class S4Model(nn.Module):
         lr = params['lr']
         prenorm = params['prenorm']
         dataset = params['dataset']
+        norm_fn = params['norm_fn']
 
         self.prenorm = prenorm
+        self.norm_fn = norm_fn
         
         if 'coder_quant' in model_args and model_args['coder_quant'] is not None:
             self.coder_quant = int(model_args['coder_quant'])
         else:
             self.coder_quant = None
+
+        if 'model' in model_args and model_args['model'] is not None:
+            spec_model = model_args['model']
+        else:
+            spec_model = None
 
         # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
         if self.coder_quant is not None:
@@ -108,16 +163,20 @@ class S4Model(nn.Module):
         self.dropouts = nn.ModuleList()
 
         for _ in range(n_layers):
-            if dataset == 'pathfinder':
+            if spec_model == 'S4' or (spec_model is None and dataset in ['pathfinder', 'text', 'list', 'cifar10']):
                 self.s4_layers.append(
                     S4(d_model, dropout=dropout, transposed=True, **model_args)  ## , lr=min(0.001, lr)
                 )
-                self.norms.append(nn.BatchNorm1d(1024))
             else:
                 self.s4_layers.append(
                     S4D(d_model, d_state=d_state, dropout=dropout, transposed=True, weight_noise=weight_noise, **model_args, lr=min(0.001, lr))
                 )
+                
+            if norm_fn == 'layer':
                 self.norms.append(nn.LayerNorm(d_model))
+            else:
+                self.norms.append(nn.BatchNorm1d(d_model))
+
             self.dropouts.append(dropout_fn(dropout))
 
         # Linear decoder
@@ -143,10 +202,16 @@ class S4Model(nn.Module):
         for layer, norm, dropout in zip(self.s4_layers, self.norms, self.dropouts):
             # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
 
+            #import pdb
+            #pdb.set_trace()
             z = x
             if self.prenorm:
                 # Prenorm
-                z = norm(z.transpose(-1, -2)).transpose(-1, -2)
+                if self.norm_fn == 'layer':
+                    z = norm(z.transpose(-1, -2)).transpose(-1, -2)                
+                elif self.norm_fn == 'batch':
+                    z = norm(z)
+                    #z = norm(z.transpose(-1, -2)).transpose(-1, -2)
 
             # Apply S4 block: we ignore the state input and output
             z, _ = layer(z)
@@ -161,7 +226,11 @@ class S4Model(nn.Module):
 
             if not self.prenorm:
                 # Postnorm
-                x = norm(x.transpose(-1, -2)).transpose(-1, -2)
+                if self.norm_fn == 'layer':
+                    x = norm(x.transpose(-1, -2)).transpose(-1, -2)
+                elif self.norm_fn == 'batch':
+                    x = norm(x)
+                    #x = norm(x.transpose(-1, -2)).transpose(-1, -2)
         
         x = x.transpose(-1, -2)
 

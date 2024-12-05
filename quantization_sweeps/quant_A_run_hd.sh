@@ -1,15 +1,6 @@
 #!/bin/bash
 
-python training.py --dataset hd --gpu 0 --A_quant 16384 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 4096 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 1024 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 512 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 256 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 128 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 64 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 32 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 16 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 8 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 4 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 2 --check_path A_quant_max_hd_S4_1l --subsample 8
-python training.py --dataset hd --gpu 0 --A_quant 1 --check_path A_quant_max_hd_S4_1l --subsample 8
+for ql in 16384 4096 1024 512 256 128 64 32 16 8 4 2 1
+do
+    python training.py --dataset hd --subsample 8 --n_layers_m 1 --gpu 0  --A_quant $ql --check_path A_quant_max_hd_S4D_1l_noise
+done

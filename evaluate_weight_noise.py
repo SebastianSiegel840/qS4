@@ -37,36 +37,35 @@ if tuple(map(int, torch.__version__.split('.')[:2])) >= (1, 12):
 else:
     dropout_fn = nn.Dropout2d
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, default='test', help='wandb run name')
 parser.add_argument('--project', type=str, default='test', help='wandb project name')
 parser.add_argument('--wandb_status', type=str, default='disabled', help='wandb mode: online, offline, disabled')
 # Optimizer
 parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
-parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight decay')
+parser.add_argument('--weight_decay', default=0.05, type=float, help='Weight decay')
 # Scheduler
 # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
 parser.add_argument('--epochs', default=100, type=int, help='Training epochs')
 # Dataset
-parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
+parser.add_argument('--dataset', default='hd', choices=['mnist', 'cifar10', 'hd', 'dn', 'pathfinder'], type=str, help='Dataset')
 parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
-parser.add_argument('--subsample', default=1,type=int, help='specify subsampling ratio')
+parser.add_argument('--subsample', default=8,type=int, help='specify subsampling ratio')
 # Dataloader
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
 # Model # SEE models/
-#parser.add_argument('--n_layers', default=4, type=int, help='Number of layers')
-#parser.add_argument('--d_model', default=128, type=int, help='Model dimension')
-#parser.add_argument('--dropout', default=0.1, type=float, help='Dropout')
-#parser.add_argument('--prenorm', action='store_true', help='Prenorm')
-parser.add_argument('--d_state', default=64, type=int, help="state dimension")
+parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
+parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
+parser.add_argument('--d_state', default=64, type=int, help='State dimension')
+parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
+parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
 parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
 parser.add_argument('--net', default="S4Model", type=str, help='which model class to use')
 parser.add_argument('--splitting_factor', type=int, default=1, help='Number of chunks to divide the initial samples')
-parser.add_argument('--gpu', type=int, default=[1], help='which gpu(s) to use', nargs='+')
+parser.add_argument('--gpu', type=int, default=[0], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
 parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
@@ -79,16 +78,42 @@ parser.add_argument('--C_quant', default=None)
 parser.add_argument('--dt_quant', default=None)
 parser.add_argument('--act_quant', default=None)
 parser.add_argument('--coder_quant', default=None)
-parser.add_argument('--state_quant', default=None)
 parser.add_argument('--all_quant', default=None)
+parser.add_argument('--state_quant', default=None)
+
+parser.add_argument('--nonlin', default='glu')
+
+parser.add_argument('--debug', action='store_true')
+parser.add_argument('--hd_small', action='store_true')
+
+parser.add_argument('--defmax', default=None)
+parser.add_argument('--defmax_train', action='store_true')
 
 parser.add_argument('--check_path', default=None)
 
+parser.add_argument('--q_param', type=str, default='all')
+parser.add_argument('--noisy_training', action='store_true')
+
 parser_args = parser.parse_args()
+
+
+### Save manual model configs ###
+n_layers = parser_args.n_layers_m
+d_model = parser_args.d_model_m
+dropout = parser_args.dropout_m
+prenorm = parser_args.prenorm
 
 model_lib = __import__(parser_args.model_file)
 
 args = getattr(model_lib, 'return_args')(parser_args) # Network specific configs
+
+### Enter manual configs if present ###
+if n_layers is not None:
+    args.n_layers = n_layers
+if d_model is not None:
+    args.d_model = d_model
+if dropout is not None:
+    args.dropout = dropout
 
 setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
 
@@ -302,7 +327,10 @@ if args.all_quant is not None:
         'linear_quant': args.all_quant,
         'act_quant': args.all_quant,
         'coder_quant': args.all_quant,
-        'state_quant': args.all_quant
+        'state_quant': args.all_quant,
+        'nonlin': args.nonlin,
+        'defmax': args.defmax,
+        'defmax_train': args.defmax_train
     }
 else:
     model_args = {
@@ -314,29 +342,37 @@ else:
         'linear_quant': args.linear_quant,
         'act_quant': args.act_quant,
         'coder_quant': args.coder_quant,
-        'state_quant': args.state_quant
+        'state_quant': args.state_quant,
+        'nonlin': args.nonlin,
+        'defmax': args.defmax,
+        'defmax_train': args.defmax_train
     }
 
 for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear_quant', 'act_quant', 'coder_quant', 'state_quant']:
     if model_args[arg] == 'None':
         model_args[arg] = None
 
-def evaluate_model(check_path, model_args, quantization, levels, num_batches=None, res_file=None): # quantization is list of tuples ('quant_param', value)
+def evaluate_model(check_path, model_args, quantization, levels, num_batches=None, res_file=None, runs=5): # quantization is list of tuples ('quant_param', value)
     if check_path is None:
         if args.dataset == 'cifar10':
-            check_point_test_path = './checkpoint/baseline_gr/ckpt0.pth'
-            save_path = 'baseline_gr/ckpt0.pth'
+            check_point_test_path = './checkpoint/baseline_gr/baseline.pth'
         elif args.dataset == 'pathfinder':
             check_point_test_path = './checkpoint/baseline_S4D_path_6l/ckpt0.pth'
-            save_path = 'baseline_S4D_path_6l/ckpt0.pth'
+        elif args.dataset == 'hd':
+            check_point_test_path = './checkpoint/baseline_hd_1l/baseline.pth'
+        save_path = check_path
+        
     else:
         check_point_test_path = './checkpoint/' + check_path
         save_path = check_path
     
     check_point = torch.load(check_point_test_path)
-    print(f"{check_path : <40}", end="")
+    print(f"{check_point_test_path : <40}", end="")
     if res_file is not None:
-        res_file.write(check_path + "\t")
+        if check_path is not None:
+            res_file.write(check_path + "\t")
+        else:
+            res_file.write(check_point_test_path + "\t")
     
     for elem in quantization:
         if elem[0] == 'all_quant':
@@ -364,9 +400,9 @@ def evaluate_model(check_path, model_args, quantization, levels, num_batches=Non
         model_test = getattr(model_lib, args.net)(args, d_input, d_output, **model_args, weight_noise=std).to(device)
         model_test.load_state_dict(check_point['model'])
         acc = 0
-        for _ in range(5):
+        for _ in range(runs):
             acc = acc + eval(model_test, testloader, save_path=save_path, num_batches=num_batches, noise_mag=0.0, noise_std=0.)
-        acc /= 5
+        acc /= runs
         print(f"{'%.2f' : <13}" % acc, end="")
         if res_file is not None:
             res_file.write("%.2f\t" % acc)
@@ -385,32 +421,61 @@ def print_header(levels, res_file=None):
     for lev in levels:
         print(f"{'%.2E' : <10}" % lev, end="")
         if res_file is not None:
-            res_file.write(format(lev))
+            res_file.write(format(lev) + "\t")
     if res_file is not None:
         res_file.write("\n")
     
     print("\n\n")
 
 
-high_exp = -1
-low_exp = -4
-steps_per_dec=5
-levels = np.logspace(low_exp, high_exp, num=(high_exp - low_exp)*steps_per_dec+1, base=10)
-res_file = open("./evaluation/noise/weight_noise_A.txt", "w")
-#base_path = "all_quant_max_gr_rerun/all"
-#base_path = "act_quant_max_gr_rerun/act"
-base_path = "A_quant_max_gr_rerun/A"
-quant_levels = [16384, 4096, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2]
+quantized_param = parser_args.q_param
+
+low = 0.
+high = 5e-2
+step = 2e-3
+levels = np.arange(low, high, step)
+
+#high = 0
+#low = -4
+#steps_per_dec=1
+#levels = np.logspace(low, high, num=(high - low)*steps_per_dec+1, base=10)
+
+if args.dataset == "hd":
+    if not args.noisy_training:
+        res_file = open("./evaluation/noise/weight_noise_" + quantized_param + "_hd.txt", "w")
+        base_path = quantized_param + "_quant_max_hd_S4D_1l_noise/" + quantized_param
+    else:
+        res_file = open("./evaluation/noise/weight_noise_" + quantized_param + "noise_hd.txt", "w")
+        base_path = quantized_param + "_noise_max_hd_S4D_1l_noise/" + "weight_noise"
+elif args.dataset == "cifar10":
+    if not args.noisy_training:
+        res_file = open("./evaluation/noise/weight_noise_" + quantized_param + "_gr.txt", "w")
+        base_path = quantized_param + "_quant_max_gr_noise/" + quantized_param
+    else:
+        pass
+
+
+quant_levels = [None, 16384, 4096, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2]
+tnoise_levels = levels
 
 print_header(levels, res_file=res_file)
 
-for iq, quant_level in enumerate(quant_levels):
-    if quant_level is not None:
-        add = " " + format(iq + 1) if iq > 0 else " 0"
-        #add = ""
-        evaluate_model(base_path + format(quant_level) + add + ".pth", model_args, [('A_quant', quant_level)], levels, res_file=res_file)
-    else:
-        evaluate_model(None, model_args, [('A_quant', quant_level)], levels, res_file=res_file)
+if not args.noisy_training:
+    for iq, quant_level in enumerate(quant_levels):
+        if quant_level is not None:
+            #add = " " + format(iq + 1) if iq > 0 else " 0"
+            add = ""
+            evaluate_model(base_path + format(quant_level) + add + ".pth", model_args, [(quantized_param + '_quant', quant_level)], levels, res_file=res_file)
+        else:
+            evaluate_model(None, model_args, [], levels, res_file=res_file)
+else:
+    for iq, noise_level in enumerate(tnoise_levels):
+        if noise_level is not None:
+            #add = " " + format(iq + 1) if iq > 0 else " 0"
+            add = ""
+            evaluate_model(base_path + format(noise_level) + add + ".pth", model_args, [], levels, res_file=res_file)
+        else:
+            evaluate_model(None, model_args, [], levels, res_file=res_file)
     
 res_file.close()
 print("\n")
