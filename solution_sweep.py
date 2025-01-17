@@ -38,6 +38,7 @@ import time
 import wandb
 import numpy as np
 import sys
+import copy
 
 from tqdm.auto import tqdm
     
@@ -52,6 +53,10 @@ sys.path.append(path_s4)
 sys.path.append("models")
 
 print("Modules load!")
+
+
+checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run1/all128.pth"
+checkpoint_stop = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run2/all128.pth"
 
 dataset_folder = '/Data/pgi-15/datasets/intel_dns/'
 
@@ -163,6 +168,8 @@ else:
         device = torch.device("cpu")
         print("\nCUDA not available")
 
+check1 = torch.load(checkpoint_start, map_location=device)
+check2 = torch.load(checkpoint_stop, map_location=device)
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
@@ -367,34 +374,6 @@ elif args.dataset == "dn": # denoising task
         return torch.stack(noisy), torch.stack(clean)
 else: 
     raise NotImplementedError 
-'''elif args.dataset == "list": # ListOps of LRA
-    d_input = 1
-    d_output = 10
-
-    dataset = lra.ListOps("listops", data_dir="/Local/ssiegel/datasets/lra_release/listops-1000")
-    dataset.setup()
-    trainset = dataset.dataset_train
-    valset = dataset.dataset_val
-    testset = dataset.dataset_test
-    
-    collate_fn = dataset._collate_fn
-
-elif args.dataset == "text": # ListOps of LRA
-        d_input = 1
-        d_output = 2
-
-        dataset = lra.IMDB("imdb")
-        dataset.setup()
-        trainset = dataset.dataset_train
-        valset = dataset.dataset_train
-        testset = dataset.dataset_train
-
-        #import pdb
-        #pdb.set_trace()
-    
-    collate_fn = dataset._collate_fn
-'''
-
 
 
 def custom_collate(batch):
@@ -535,65 +514,21 @@ if device == 'cuda':
     cudnn.benchmark = True
 
 if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     checkpoint = torch.load('./checkpoint/ckpt.pth')
-    model.load_state_dict(checkpoint['model'])
+    
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
 
-def setup_optimizer(model, lr, weight_decay, epochs):
-    """
-    S4 requires a specific optimizer setup.
-
-    The S4 layer (A, B, C, dt) parameters typically
-    require a smaller learning rate (typically 0.001), with no weight decay.
-
-    The rest of the model can be trained with a higher learning rate (e.g. 0.004, 0.01)
-    and weight decay (if desired).
-    """
-
-    # All parameters in the model
-    all_parameters = list(model.parameters())
-
-    # General parameters don't contain the special _optim key
-    params = [p for p in all_parameters if not hasattr(p, "_optim")]
-
-    # Create an optimizer with the general parameters
-    optimizer = optim.AdamW(params, lr=lr, weight_decay=weight_decay)
-
-    # Add parameters with special hyperparameters
-    hps = [getattr(p, "_optim") for p in all_parameters if hasattr(p, "_optim")]
-    hps = [
-        dict(s) for s in sorted(list(dict.fromkeys(frozenset(hp.items()) for hp in hps)))
-    ]  # Unique dicts
-    for hp in hps:
-        params = [p for p in all_parameters if getattr(p, "_optim", None) == hp]
-        optimizer.add_param_group(
-            {"params": params, **hp}
-        )
-
-    # Create a lr scheduler
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience, factor=0.2)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
-
-    # Print optimizer info
-    keys = sorted(set([k for hp in hps for k in hp.keys()]))
-    for i, g in enumerate(optimizer.param_groups):
-        group_hps = {k: g.get(k, None) for k in keys}
-        print(' | '.join([
-            f"Optimizer group {i}",
-            f"{len(g['params'])} tensors",
-        ] + [f"{k} {v}" for k, v in group_hps.items()]))
-
-    return optimizer, scheduler
-
 criterion = nn.CrossEntropyLoss()
 
-optimizer, scheduler = setup_optimizer(
-    model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
-)
+def interpolate_checkpoints(ckpt1, ckpt2, alpha):
+    ckpt_new = copy.deepcopy(ckpt1)
+    for param in ckpt1['model']:
+        ckpt_new['model'][param].to(device)
+        ckpt_new['model'][param] = ckpt1['model'][param].to(device) * (1-alpha) + ckpt2['model'][param].to(device) * alpha
+    return ckpt_new
+
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
@@ -611,48 +546,7 @@ if args.check_path is not None:
 else:
     num_ckpt = len(os.listdir('./checkpoint/'))
 
-# Training
-def train():
-    model.train()
-    train_loss = 0
-    correct = 0
-    total = 0
-    pbar = tqdm(enumerate(trainloader))
-    
-    #for batch_idx, (inputs, targets) in pbar:
-    for batch_idx, elem in pbar:
-        if args.dataset in ['list', 'text']:
-            inputs, targets, _ = elem
-            inputs = inputs.float()[:, :, None]
-            targets = targets#.int()
-        else:
-            inputs, targets = elem
-
-        inputs, targets = inputs.to(device), targets.to(device)
-        optimizer.zero_grad()
-        if args.dataset == 'dn':
-            inputs = inputs.unsqueeze(2)
-            targets = targets.unsqueeze(2)
-
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-
-        train_loss += loss.item()
-        if args.dataset != 'dn':
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-
-            if batch_idx % 10 == 0:
-                pbar.set_description(
-                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-                wandb.log({'loss': train_loss/(batch_idx+1), 
-                           'acc': 100*correct/total})
-
-def eval(epoch, dataloader, test=False, checkpoint=False):
+def eval(dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
     eval_loss = 0
@@ -698,84 +592,16 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
         else:
             wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                        'val_acc': 100*correct/total})
-    
-    if np.isnan(eval_loss):
-        return -1
 
     acc = 100.*correct/total  
-    # Save checkpoint.
-    if checkpoint:
-        
-        if acc > best_acc:
-            state = {
-                'model': model.state_dict(),
-                'acc': acc,
-                'epoch': epoch,
-            }
-            if args.check_path is None:
-                torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
-            else:
-                torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '.pth') #' ' + format(num_ckpt) + '.pth')
-            
-            best_acc = acc
-    return acc
+    return eval_loss/(batch_idx+1), acc
 
-if args.energy:
-    monitor.begin_window("training")
+res_file = open("/Users/ssiegel/mem-hippo/evaluation/param_sweep/equal_quant_extended", "w")
 
-pbar = tqdm(range(start_epoch, args.epochs))
-best_acc = 0
-for epoch in pbar:
-
-    print("Epoch", epoch)
-    wandb.log({'epoch': epoch})
-
-    start = time.time()
-    train()
-    print("train time", time.time() - start)
-    print("Validation...")
-    val_acc = eval(epoch, valloader, checkpoint=True)
-    if val_acc == -1:
-        break
-    if val_acc > best_acc:
-        best_acc = val_acc
-    print("\nTesting...")
-    eval(epoch, testloader, test=True)
-    scheduler.step()
-    print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
-
-
-if args.summary_file is not None:
-    summary_file = open(args.summary_file, "a+")
-    summary_file.write(format(best_acc) + "\t" + format(val_acc) + "\n")
-    summary_file.close()
-
-if args.check_path is not None:
-    if True:
-        state = {
-                'model': model.state_dict(),
-                'acc': val_acc,
-                'epoch': epoch,
-            }
-        #if args.check_path is None:
-        #    torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
-        #else:
-        #    torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '_last.pth')
-
-    file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
-    if args.all_quant is not None:
-        file.write("all\t" + checkname + " " + format(num_ckpt) + "\t" + format(best_acc) + "\n")
-        file.close()
-        exit()
-    else:
-        for param in model_args:
-            if model_args[param] is not None:
-                file.write(param + "\t" + format(model_args[param]) + "\t" + format(best_acc) + "\n")
-                file.close()
-                exit()
-    file.write("baseline\tfloat\t" + format(best_acc) + "\n")
-    file.close()
-
-if args.energy:
-    meas_total = monitor.end_window("training")
-    print(f"Total energy consumption of training run: {meas_total.total_energy / 3.6e6} kWh")
+for alpha in torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
+    ckpt_new = interpolate_checkpoints(check1, check2, alpha)
+    model.load_state_dict(ckpt_new['model'])
+    print("Evaluating interpolated checkpoint with alpha: " + format(alpha))
+    loss, acc = eval(testloader, test=True)
+    print("Accuracy: " + format(acc))
+    res_file.write(format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")

@@ -163,9 +163,9 @@ class S4Model(nn.Module):
         self.dropouts = nn.ModuleList()
 
         for _ in range(n_layers):
-            if spec_model == 'S4' or (spec_model is None and dataset in ['pathfinder', 'text', 'list', 'cifar10']):
+            if spec_model == 'S4' or (spec_model is None and dataset in ['pathfinder', 'text', 'list', 'hd']):
                 self.s4_layers.append(
-                    S4(d_model, dropout=dropout, transposed=True, **model_args)  ## , lr=min(0.001, lr)
+                    S4(d_model, d_state=d_state, dropout=dropout, transposed=True , **model_args)  ##, lr=min(0.001, lr)
                 )
             else:
                 self.s4_layers.append(

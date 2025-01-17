@@ -323,8 +323,8 @@ if device == 'cuda':
 if args.dataset == 'cifar10':
     #check_point_test_path = './checkpoint/baseline_gr/baseline.pth'
     #file_name = "parameterSweep" + "_max_gr_S4D"
-    check_point_test_path = './checkpoint/baseline_gr_S4legs/baseline.pth'
-    file_name = "parameterSweep" + "_max_gr_S4legs"
+    check_point_test_path = './checkpoint/baseline_gr_S4fourier/baseline.pth'
+    file_name = "parameterSweep" + "_max_gr_S4fourier"
 elif args.dataset == 'hd':
     if args.n_layers_m == None:
         check_point_test_path = './checkpoint/baseline_hd/ 5.pth'
