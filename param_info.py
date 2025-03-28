@@ -55,8 +55,8 @@ sys.path.append("models")
 print("Modules load!")
 
 
-checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run1/baseline.pth"
-checkpoint_stop = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run2/baseline.pth"
+checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run1/all128.pth"
+checkpoint_stop = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run2/all128.pth"
 
 dataset_folder = '/Data/pgi-15/datasets/intel_dns/'
 
@@ -596,12 +596,11 @@ def eval(dataloader, test=False, checkpoint=False):
     acc = 100.*correct/total  
     return eval_loss/(batch_idx+1), acc
 
-res_file = open("/Users/ssiegel/mem-hippo/evaluation/param_sweep/equal_quant_extended_fp", "w")
 
-for alpha in torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-    ckpt_new = interpolate_checkpoints(check1, check2, alpha)
-    model.load_state_dict(ckpt_new['model'])
-    print("Evaluating interpolated checkpoint with alpha: " + format(alpha))
-    loss, acc = eval(testloader, test=True)
-    print("Accuracy: " + format(acc))
-    res_file.write(format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+for n, ckpt in enumerate([check1]):
+
+    ckpt_new = copy.deepcopy(ckpt)
+
+    for param in ckpt['model']:
+        print(param + "\t" + format(ckpt['model'][param].shape))
+

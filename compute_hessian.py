@@ -54,10 +54,6 @@ sys.path.append("models")
 
 print("Modules load!")
 
-
-checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run1/baseline.pth"
-checkpoint_stop = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run2/baseline.pth"
-
 dataset_folder = '/Data/pgi-15/datasets/intel_dns/'
 
 # Dropout broke in PyTorch 1.11
@@ -91,7 +87,7 @@ parser.add_argument('--num_workers', default=4, type=int, help='Number of worker
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
 # Model # SEE models/
 parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
-parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
+parser.add_argument('--d_model_m', default=128, type=int, help='Model dimension')
 parser.add_argument('--d_state', default=64, type=int, help='State dimension')
 parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
 parser.add_argument('--prenorm', action='store_true', help='Prenorm')
@@ -100,7 +96,7 @@ parser.add_argument('--resume', '-r', action='store_true', help='Resume from che
 parser.add_argument('--model_file', type=str, default='s4_model',  help='which model file to use')
 parser.add_argument('--net', default="S4Model", type=str, help='which model class to use')
 parser.add_argument('--splitting_factor', type=int, default=1, help='Number of chunks to divide the initial samples')
-parser.add_argument('--gpu', type=int, default=[3], help='which gpu(s) to use', nargs='+')
+parser.add_argument('--gpu', type=int, default=[0], help='which gpu(s) to use', nargs='+')
 parser.add_argument('--n_fft', type=int, default=512, help='number of FFT specturm, hop is n_fft // 4')
 
 parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
@@ -167,9 +163,6 @@ else:
     else:
         device = torch.device("cpu")
         print("\nCUDA not available")
-
-check1 = torch.load(checkpoint_start, map_location=device)
-check2 = torch.load(checkpoint_stop, map_location=device)
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
@@ -522,14 +515,6 @@ if args.resume:
 
 criterion = nn.CrossEntropyLoss()
 
-def interpolate_checkpoints(ckpt1, ckpt2, alpha):
-    ckpt_new = copy.deepcopy(ckpt1)
-    for param in ckpt1['model']:
-        ckpt_new['model'][param].to(device)
-        ckpt_new['model'][param] = ckpt1['model'][param].to(device) * (1-alpha) + ckpt2['model'][param].to(device) * alpha
-    return ckpt_new
-
-
 ###############################################################################
 # Everything after this point is standard PyTorch training!
 ###############################################################################
@@ -596,12 +581,117 @@ def eval(dataloader, test=False, checkpoint=False):
     acc = 100.*correct/total  
     return eval_loss/(batch_idx+1), acc
 
-res_file = open("/Users/ssiegel/mem-hippo/evaluation/param_sweep/equal_quant_extended_fp", "w")
 
-for alpha in torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-    ckpt_new = interpolate_checkpoints(check1, check2, alpha)
-    model.load_state_dict(ckpt_new['model'])
-    print("Evaluating interpolated checkpoint with alpha: " + format(alpha))
+checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/for_prune/baseline.pth"
+
+check1 = torch.load(checkpoint_start, map_location=device)
+
+param_part = "s4_layer"
+res_file_name = "/Users/ssiegel/mem-hippo/evaluation/param_prune/prune_fp_" + param_part
+
+for n, ckpt in enumerate([check1]):
+
+    rf_empty = True
+
+    #rf = open(res_file_name, "r")
+    #lines = re.readlines()
+    #if len(lines) == 0:
+    #    rf_empty = True
+    #re.close()
+
+    res_file = open(res_file_name, "a+")
+    model.load_state_dict(ckpt['model'])
     loss, acc = eval(testloader, test=True)
-    print("Accuracy: " + format(acc))
-    res_file.write(format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+    baseline_acc = acc
+    if rf_empty:
+        res_file.write("baseline\t" + format(loss) + "\t" + format(acc) + "\n")
+    res_file.close()
+
+    ckpt_new = copy.deepcopy(ckpt)
+
+    for param in ckpt['model']:
+        if param_part in param:
+            print(param)
+            if len(ckpt['model'][param].shape) == 2:
+                    for i in range(ckpt['model'][param].shape[0]):
+                        print(param + "\t" + format(i))
+                        for j in range(ckpt['model'][param].shape[1]):
+                            rf = open(res_file_name, "r")
+                            already_computed = False
+                            lines = rf.readlines()
+                            for line in lines:
+                                if param + "\t" + format(i) + "\t" + format(j) in line:
+                                    already_computed = True
+                                    acc = float(line.rsplit("\t")[4].replace("\n", ""))
+                                    if acc >= baseline_acc - 1:
+                                        ckpt_new['model'][param][i, j] = 0
+                                    continue
+                            rf.close()
+                            
+                            if not already_computed:
+                                res_file = open(res_file_name, "a+")
+                                tmp = copy.deepcopy(ckpt_new['model'][param][i, j])
+                                ckpt_new['model'][param][i, j] = 0
+                                model.load_state_dict(ckpt_new['model'])
+                                loss, acc = eval(testloader, test=True)
+                                if acc < baseline_acc - 1:
+                                    ckpt_new['model'][param][i, j] = tmp
+                                res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+                                res_file.close()
+            elif len(ckpt['model'][param].shape) == 1:
+                    for i in range(ckpt['model'][param].shape[0]):
+                        print(param + "\t" + format(i))
+                        rf = open(res_file_name, "r")
+                        already_computed = False
+                        lines = rf.readlines()
+                        for line in lines:
+                            if param + "\t" + format(i) in line:
+                                already_computed = True
+                                acc = float(line.rsplit("\t")[3].replace("\n", ""))
+                                if acc >= baseline_acc - 1:
+                                    ckpt_new['model'][param][i] = 0
+                                continue
+                        rf.close()
+
+                        if not already_computed:
+                            res_file = open(res_file_name, "a+")
+                            tmp = copy.deepcopy(ckpt_new['model'][param][i])
+                            ckpt_new['model'][param][i] = 0
+                            model.load_state_dict(ckpt_new['model'])
+                            loss, acc = eval(testloader, test=True)
+                            if acc < baseline_acc - 1:
+                                ckpt_new['model'][param][i] = tmp
+                            res_file.write(param + "\t" + format(i) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+                            res_file.close()
+            if len(ckpt['model'][param].shape) == 3:
+                    for i in range(ckpt['model'][param].shape[0]):
+                        print(param + "\t" + format(i))
+                        for j in range(ckpt['model'][param].shape[1]):
+                            for k in range(ckpt['model'][param].shape[2]):
+                                rf = open(res_file_name, "r")
+                                already_computed = False
+                                lines = rf.readlines()
+                                for line in lines:
+                                    if param + "\t" + format(i) + "\t" + format(j) + "\t" + format(k) in line:
+                                        already_computed = True
+                                        acc = float(line.rsplit("\t")[5].replace("\n", ""))
+                                        if acc >= baseline_acc - 1:
+                                            ckpt_new['model'][param][i, j, k] = 0
+                                        continue
+                                rf.close()
+                                
+                                if not already_computed:
+                                    res_file = open(res_file_name, "a+")
+                                    tmp = copy.deepcopy(ckpt_new['model'][param][i, j, k])
+                                    ckpt_new['model'][param][i, j, k] = 0
+                                    model.load_state_dict(ckpt_new['model'])
+                                    loss, acc = eval(testloader, test=True)
+                                    if acc < baseline_acc - 1:
+                                        ckpt_new['model'][param][i, j, k] = tmp
+                                    res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(k) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+                                    res_file.close()
+            else:
+                print(param)
+                print(len(ckpt['model'][param]))
+
+

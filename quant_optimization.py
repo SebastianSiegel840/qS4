@@ -9,7 +9,7 @@ resume_timestamp = ""
 
 start_all = False
 
-low_to_high = True
+low_to_high = False
 
 config_S4D_cifar10_init_high = {
     'N': 128,
@@ -17,14 +17,14 @@ config_S4D_cifar10_init_high = {
     'd_model': 4,
     'd_in': 1,
     'd_out': 10,
-    'r_A': 32,
+    'r_A': 10,
     'r_B': 0,
-    'r_C': 32,
-    'r_state' : 32,
-    'r_lin': 32,
-    'r_coder': 32,
-    'r_act': 32,
-    'r_dt': 32,
+    'r_C': 10,
+    'r_state' : 10,
+    'r_lin': 10,
+    'r_coder': 10,
+    'r_act': 10,
+    'r_dt': 10,
     's4': False,
     'savepath': 'S4D_cifar10'
 }
@@ -146,7 +146,7 @@ def calculate_next_steps(base_args, step_parameters, model_metric=None):
     
     return steps, step_costs
 
-def evaluate_model_step(run_config, cutoff_acc=80., max_cost_step=None, model_metric=None):
+def evaluate_model_step(run_config, cutoff_acc=83., max_cost_step=None, model_metric=None):
     global start_all
     tab_data = np.genfromtxt(res_folder + "/summary", delimiter="\t")
 
@@ -169,7 +169,8 @@ def evaluate_model_step(run_config, cutoff_acc=80., max_cost_step=None, model_me
         summary_file.write(format(np.sum(model_metric(run_config))) + "\t")
         summary_file.close()
 
-        subprocess.run(["python", "training.py", "--dataset", "cifar10", "--grayscale",
+        subprocess.run([#"srun", "--nodes=1", "--account=ssiegel", "--ntasks=1", "--gpus-per-task=1", "--partition=pgi14",
+                        "python", "training.py", "--dataset", "cifar10", "--grayscale",
                         "--A_quant", format(int(2**run_config['r_A'])),
                         "--C_quant", format(int(2**run_config['r_C'])),
                         "--state_quant", format(int(2**run_config['r_state'])),
@@ -179,9 +180,59 @@ def evaluate_model_step(run_config, cutoff_acc=80., max_cost_step=None, model_me
                         "--dt_quant", format(int(2**run_config['r_dt'])),
                         "--check_path", time_stamp,
                         "--summary_file", res_folder + "/summary",
-                        "--gpu", "4",
                         "--debug",
-                        "--epochs", "50"
+                        ]
+        )
+
+        tab_data = np.genfromtxt(res_folder + "/summary", delimiter="\t")
+        val_acc = tab_data[-1, -2]
+
+    if val_acc > cutoff_acc and not low_to_high or val_acc < cutoff_acc and low_to_high:
+        steps, step_costs = calculate_next_steps(run_config, optim_params, model_metric=model_metric)
+        sort_indices = np.argsort(np.array(step_costs))
+
+        for ind in sort_indices:
+            evaluate_model_step(steps[ind], cutoff_acc=cutoff_acc, model_metric=model_metric)
+    else:
+        if start_all:
+            start_all = False
+
+
+def optimize_model_non_rec(run_config, cutoff_acc=80., max_cost_step=None, model_metric=None):
+    hom_start = True
+    tab_data = np.genfromtxt(res_folder + "/summary", delimiter="\t")
+
+    if len(tab_data.shape) > 1:
+        for line in tab_data[1:, :]:
+            already_computed = True
+            for i, param in enumerate(optim_params):
+                if int(line[i]) != run_config[param]:
+                    already_computed = False
+            if already_computed:
+                val_acc = line[-2]
+                break
+    else:
+        already_computed = False
+
+    if not already_computed:
+        summary_file = open(res_folder + "/summary", "a+")
+        for param in optim_params:
+            summary_file.write(format(run_config[param]) + "\t")
+        summary_file.write(format(np.sum(model_metric(run_config))) + "\t")
+        summary_file.close()
+
+        subprocess.run(["srun", "--nodes=1", "--account=ssiegel", "--ntasks=1", "--gpus-per-task=1",
+                        "python", "training.py", "--dataset", "cifar10", "--grayscale",
+                        "--A_quant", format(int(2**run_config['r_A'])),
+                        "--C_quant", format(int(2**run_config['r_C'])),
+                        "--state_quant", format(int(2**run_config['r_state'])),
+                        "--act_quant", format(int(2**run_config['r_act'])),
+                        "--linear_quant", format(int(2**run_config['r_lin'])),
+                        "--coder_quant", format(int(2**run_config['r_coder'])),
+                        "--dt_quant", format(int(2**run_config['r_dt'])),
+                        "--check_path", time_stamp,
+                        "--summary_file", res_folder + "/summary",
+                        "--debug",
                         ]
         )
 

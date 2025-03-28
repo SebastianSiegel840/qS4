@@ -60,7 +60,7 @@ class return_args(object):
                 d_state = 64,
                 dropout = 0.0, #0.1 0.0
                 prenorm = 'store_true',
-                norm_fn = 'layer',
+                norm_fn = 'batch', #### CHANGED!!!####
                 weight_decay = 0.05,
                 epochs = 100,
                 batch_size = 64
@@ -83,8 +83,8 @@ class return_args(object):
                 d_model = 128, #128 256
                 d_state = 128,
                 dropout = 0.1, #0.1 0.0
-                prenorm = 'store_false',
-                norm_fn = 'layer',
+                prenorm = 'store_true',
+                norm_fn = 'layer', #### CHANGED!!! layer is original ######
                 epochs = 200,
                 batch_size = 64,
                 weight_decay = 0.05
@@ -117,7 +117,7 @@ class return_args(object):
                 d_model = 128, #128 256
                 dropout = 0.1, #0.1 0.0
                 prenorm = 'store_true',
-                norm_fn = 'layer',
+                norm_fn = 'batch', #### CHANGED!!!######
                 weight_decay = 0.05,
                 epochs = 100,
                 batch_size = 64
@@ -129,9 +129,17 @@ class S4Model(nn.Module):
     def __init__(self, params, d_input, d_output, weight_noise=None, **model_args):
         super(S4Model, self).__init__()
 
-        d_model = params['d_model']
-        d_state = params['d_state']
         n_layers = params['n_layers']
+        if type(params['d_model']) is list or type(params['d_model']) is tuple: # or True
+            d_model = params['d_model']
+        else:
+            d_model = [params['d_model'] for _ in range(n_layers)]
+
+        if type(params['d_state']) is list or type(params['d_state']) is tuple: # or True
+            d_state = params['d_state']
+        else:
+            d_state = [params['d_state'] for _ in range(n_layers)]
+        
         dropout = params['dropout']
         lr = params['lr']
         prenorm = params['prenorm']
@@ -153,37 +161,58 @@ class S4Model(nn.Module):
 
         # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
         if self.coder_quant is not None:
-            self.encoder = pt.QuantizedLinear(d_input, d_model, quant_levels=self.coder_quant, quant_fn=pt.max_quant_fn)
+            self.encoder = pt.QuantizedLinear(d_input, d_model[0], quant_levels=self.coder_quant, quant_fn=pt.max_quant_fn)
         else:
-            self.encoder = pt.BaseLinear(d_input, d_model)
+            self.encoder = pt.BaseLinear(d_input, d_model[0])
 
         # Stack S4 layers as residual blocks
         self.s4_layers = nn.ModuleList()
         self.norms = nn.ModuleList()
         self.dropouts = nn.ModuleList()
 
-        for _ in range(n_layers):
-            if spec_model == 'S4' or (spec_model is None and dataset in ['pathfinder', 'text', 'list', 'hd']):
+        for l in range(n_layers):
+            pass_args = deepcopy(model_args)
+            for p in ['A_quant', 'C_quant', 'dt_quant', 'linear_quant', 'act_quant', 'state_quant']:
+
+                if model_args[p] is None or model_args[p] is 'None':
+                    pass_args[p] = None
+                elif not type(model_args[p]) is list:
+                    pass_args[p] = int(model_args[p])
+                else: # if list of quant values provided
+                    pass_args[p] = int(model_args[p][l])
+
+            if spec_model == 'S4': #or (spec_model is None and dataset in ['pathfinder', 'text', 'list', 'hd']):
                 self.s4_layers.append(
-                    S4(d_model, d_state=d_state, dropout=dropout, transposed=True , **model_args)  ##, lr=min(0.001, lr)
+                    S4(d_model[l], d_state=d_state[l], dropout=dropout, transposed=True , **pass_args)  ##, lr=min(0.001, lr)
                 )
             else:
-                self.s4_layers.append(
-                    S4D(d_model, d_state=d_state, dropout=dropout, transposed=True, weight_noise=weight_noise, **model_args, lr=min(0.001, lr))
-                )
+                if l < n_layers - 1:
+                    self.s4_layers.append(
+                        S4D(d_model[l], d_state=d_state[l], dropout=dropout, d_model_next=d_model[l+1], transposed=True, weight_noise=weight_noise, **pass_args, lr=min(0.001, lr))
+                    )
+                else:
+                    self.s4_layers.append(
+                        S4D(d_model[l], d_state=d_state[l], dropout=dropout, transposed=True, weight_noise=weight_noise, **pass_args, lr=min(0.001, lr))
+                    )
                 
             if norm_fn == 'layer':
-                self.norms.append(nn.LayerNorm(d_model))
+                if l < n_layers - 1:
+                    self.norms.append(nn.LayerNorm(d_model[l+1]))
+                else:
+                    self.norms.append(nn.LayerNorm(d_model[l]))
             else:
-                self.norms.append(nn.BatchNorm1d(d_model))
+                if l < n_layers - 1:
+                    self.norms.append(nn.BatchNorm1d(d_model[l+1]))
+                else:
+                    self.norms.append(nn.BatchNorm1d(d_model[l]))
 
             self.dropouts.append(dropout_fn(dropout))
 
         # Linear decoder
         if self.coder_quant is not None:
-            self.decoder = pt.QuantizedLinear(d_model, d_output, quant_levels=self.coder_quant, quant_fn=pt.max_quant_fn)
+            self.decoder = pt.QuantizedLinear(d_model[n_layers-1], d_output, quant_levels=self.coder_quant, quant_fn=pt.max_quant_fn)
         else:
-            self.decoder = pt.BaseLinear(d_model, d_output)
+            self.decoder = pt.BaseLinear(d_model[n_layers-1], d_output)
 
     def forward(self, x, analysis=False):
         """
@@ -196,8 +225,8 @@ class S4Model(nn.Module):
             y_encoder = deepcopy(x)
             if self.coder_quant is not None:
                 x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
+            y_layers = []
 
-        y_layers = []
         x = x.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
         for layer, norm, dropout in zip(self.s4_layers, self.norms, self.dropouts):
             # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
@@ -222,7 +251,7 @@ class S4Model(nn.Module):
             z = dropout(z)
 
             # Residual connection
-            x = z + x
+            x = z# + x
 
             if not self.prenorm:
                 # Postnorm

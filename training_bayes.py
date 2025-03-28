@@ -38,7 +38,6 @@ import time
 import wandb
 import numpy as np
 import sys
-import copy
 
 from tqdm.auto import tqdm
     
@@ -53,10 +52,6 @@ sys.path.append(path_s4)
 sys.path.append("models")
 
 print("Modules load!")
-
-
-checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run1/baseline.pth"
-checkpoint_stop = "/Users/ssiegel/mem-hippo/checkpoint/cifar10_comparison_run2/baseline.pth"
 
 dataset_folder = '/Data/pgi-15/datasets/intel_dns/'
 
@@ -91,8 +86,14 @@ parser.add_argument('--num_workers', default=4, type=int, help='Number of worker
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
 # Model # SEE models/
 parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
-parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
-parser.add_argument('--d_state', default=64, type=int, help='State dimension')
+parser.add_argument('--d_model_m0', default=128, type=int, help='Model dimension')
+parser.add_argument('--d_state0', default=64, type=int, help='State dimension')
+parser.add_argument('--d_model_m1', default=128, type=int, help='Model dimension')
+parser.add_argument('--d_state1', default=64, type=int, help='State dimension')
+parser.add_argument('--d_model_m2', default=128, type=int, help='Model dimension')
+parser.add_argument('--d_state2', default=64, type=int, help='State dimension')
+parser.add_argument('--d_model_m3', default=128, type=int, help='Model dimension')
+parser.add_argument('--d_state3', default=64, type=int, help='State dimension')
 parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
 parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
@@ -105,19 +106,38 @@ parser.add_argument('--n_fft', type=int, default=512, help='number of FFT spectu
 
 parser.add_argument('--energy', action='store_true', help='Activate energy monitoring via Zeus')
 # Quantization
-parser.add_argument('--kernel_quant', default=None)
-parser.add_argument('--linear_quant', default=None)
-parser.add_argument('--A_quant', default=None)
-parser.add_argument('--B_quant', default=None)
-parser.add_argument('--C_quant', default=None)
-parser.add_argument('--dt_quant', default=None)
-parser.add_argument('--act_quant', default=None)
-parser.add_argument('--coder_quant', default=None)
 parser.add_argument('--all_quant', default=None)
-parser.add_argument('--state_quant', default=None)
+parser.add_argument('--coder_quant', default=None)
+parser.add_argument('--B_quant', default=None)
+parser.add_argument('--kernel_quant', default=None)
+
+parser.add_argument('--linear_quant0', default='4')
+parser.add_argument('--A_quant0', default='4')
+parser.add_argument('--C_quant0', default='4')
+parser.add_argument('--dt_quant0', default='4')
+parser.add_argument('--act_quant0', default='4')
+parser.add_argument('--state_quant0', default='4')
+parser.add_argument('--linear_quant1', default='4')
+parser.add_argument('--A_quant1', default='4')
+parser.add_argument('--C_quant1', default='4')
+parser.add_argument('--dt_quant1', default='4')
+parser.add_argument('--act_quant1', default='4')
+parser.add_argument('--state_quant1', default='4')
+parser.add_argument('--linear_quant2', default='4')
+parser.add_argument('--A_quant2', default='4')
+parser.add_argument('--C_quant2', default='4')
+parser.add_argument('--dt_quant2', default='4')
+parser.add_argument('--act_quant2', default='4')
+parser.add_argument('--state_quant2', default='4')
+parser.add_argument('--linear_quant3', default='4')
+parser.add_argument('--A_quant3', default='4')
+parser.add_argument('--C_quant3', default='4')
+parser.add_argument('--dt_quant3', default='4')
+parser.add_argument('--act_quant3', default='4')
+parser.add_argument('--state_quant3', default='4')
 
 parser.add_argument('--nonlin', default='glu')
-parser.add_argument('--model', default=None)
+parser.add_argument('--model', default='S4D')
 parser.add_argument('--mode', default=None)
 parser.add_argument('--measure', default=None)
 
@@ -135,7 +155,11 @@ parser_args = parser.parse_args()
 
 ### Save manual model configs ###
 n_layers = parser_args.n_layers_m
-d_model = parser_args.d_model_m
+
+d_model = []
+for p in [parser_args.d_model_m0, parser_args.d_model_m1, parser_args.d_model_m2, parser_args.d_model_m3]:
+    d_model.append(p)
+#d_model = parser_args.d_model_m
 dropout = parser_args.dropout_m
 prenorm = parser_args.prenorm
 
@@ -151,25 +175,31 @@ if d_model is not None:
 if dropout is not None:
     args.dropout = dropout
 
-if not(args.run_sweep):
 
-    setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
+for p in ['A_quant', 'C_quant', 'state_quant', 'act_quant', 'dt_quant', 'linear_quant', 'd_state']:
+    add_args = []
+    for l in range(args.n_layers):
+        add_args.append(args.__dict__.get(p + format(l)))
+    setattr(args, p, add_args)
 
-    device = torch.device('cuda:{}'.format(args.gpu[0]))
+setattr(args, 'device', 'cuda:0')
+device = 'cuda:0'
 
-    if args.energy:
-        from zeus.monitor import ZeusMonitor
-        monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
-else:
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("\nCUDA enabled")
-    else:
-        device = torch.device("cpu")
-        print("\nCUDA not available")
+#if not(args.run_sweep) and False:
 
-check1 = torch.load(checkpoint_start, map_location=device)
-check2 = torch.load(checkpoint_stop, map_location=device)
+    #setattr(args, 'device', args.gpu[0]) if len(args.gpu)==1 else None
+    #device = torch.device('cuda:{}'.format(args.gpu[0]))
+
+#    if args.energy:
+#        from zeus.monitor import ZeusMonitor
+#        monitor = ZeusMonitor(gpu_indices=[args.gpu[0]])
+#else:
+#    if torch.cuda.is_available():
+#        device = torch.device('cuda:{}'.format(args.gpu[0]))
+#        print("\nCUDA enabled")
+#    else:
+#        device = torch.device("cpu")
+#        print("\nCUDA not available")
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
@@ -228,15 +258,15 @@ if args.dataset == 'cifar10':
     transform_train = transform_test = transform
 
     trainset = torchvision.datasets.CIFAR10(
-        root='./data/cifar/', train=True, download=True, transform=transform_train)
+        root='/Local/ssiegel/datasets/cifar/', train=True, download=True, transform=transform_train)
     trainset, _ = split_train_val(trainset, val_split=0.1)
 
     valset = torchvision.datasets.CIFAR10(
-        root='./data/cifar/', train=True, download=True, transform=transform_test)
+        root='/Local/ssiegel/datasets/cifar/', train=True, download=True, transform=transform_test)
     _, valset = split_train_val(valset, val_split=0.1)
 
     testset = torchvision.datasets.CIFAR10(
-        root='./data/cifar/', train=False, download=True, transform=transform_test)
+        root='/Local/ssiegel/datasets/cifar/', train=False, download=True, transform=transform_test)
 
     d_input = 3 if not args.grayscale else 1
     d_output = 10
@@ -374,6 +404,34 @@ elif args.dataset == "dn": # denoising task
         return torch.stack(noisy), torch.stack(clean)
 else: 
     raise NotImplementedError 
+'''elif args.dataset == "list": # ListOps of LRA
+    d_input = 1
+    d_output = 10
+
+    dataset = lra.ListOps("listops", data_dir="/Local/ssiegel/datasets/lra_release/listops-1000")
+    dataset.setup()
+    trainset = dataset.dataset_train
+    valset = dataset.dataset_val
+    testset = dataset.dataset_test
+    
+    collate_fn = dataset._collate_fn
+
+elif args.dataset == "text": # ListOps of LRA
+        d_input = 1
+        d_output = 2
+
+        dataset = lra.IMDB("imdb")
+        dataset.setup()
+        trainset = dataset.dataset_train
+        valset = dataset.dataset_train
+        testset = dataset.dataset_train
+
+        #import pdb
+        #pdb.set_trace()
+    
+    collate_fn = dataset._collate_fn
+'''
+
 
 
 def custom_collate(batch):
@@ -411,6 +469,33 @@ else:
         testset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, collate_fn=collate_fn)
 
+checkname = ""
+if args.all_quant is not None:
+    checkname = checkname + "all" + format(args.all_quant)
+if args.A_quant is not None:
+    checkname = checkname + "A" + format(args.A_quant)
+if args.B_quant is not None:
+    checkname = checkname + "B" + format(args.B_quant)
+if args.C_quant is not None:
+    checkname = checkname + "C" + format(args.C_quant)
+if args.dt_quant is not None:
+    checkname = checkname + "dt" + format(args.dt_quant)
+if args.kernel_quant is not None:
+    checkname = checkname + "kernel" + format(args.kernel_quant)
+if args.linear_quant is not None:
+    checkname = checkname + "linear" + format(args.linear_quant)
+if args.act_quant is not None:
+    checkname = checkname + "act" + format(args.act_quant)
+if args.coder_quant is not None:
+    checkname = checkname + "coder" + format(args.coder_quant)
+if args.state_quant is not None:
+    checkname = checkname + "state" + format(args.state_quant)
+if args.weight_noise is not None:
+    checkname = checkname + "weight_noise" + format(args.weight_noise)
+
+if checkname == "":
+    checkname = "baseline"
+
 model_args = {
     'A_quant': args.A_quant,
     'B_quant': args.B_quant,
@@ -440,10 +525,10 @@ if args.all_quant is not None:
     }
 else:
     model_args = {
-        'A_quant': args.A_quant,
-        'B_quant': args.B_quant,
-        'C_quant': args.C_quant,
-        'dt_quant': args.dt_quant,
+        'A_quant': args.A_quant, #[args.A_quant for _ in range(args.n_layers_m)],
+        'B_quant': args.B_quant, #[args.B_quant for _ in range(args.n_layers_m)],
+        'C_quant': args.C_quant, #[args.C_quant for _ in range(args.n_layers_m)],
+        'dt_quant': args.dt_quant, #[args.dt_quant for _ in range(args.n_layers_m)],
         'kernel_quant': args.kernel_quant,
         'linear_quant': args.linear_quant,
         'act_quant': args.act_quant,
@@ -459,32 +544,68 @@ for arg in ['A_quant', 'C_quant', 'B_quant', 'dt_quant', 'kernel_quant', 'linear
     if model_args[arg] == 'None':
         model_args[arg] = None
 
-checkname = ""
-if args.all_quant is not None:
-    checkname = checkname + "all" + format(args.all_quant)
-if args.A_quant is not None:
-    checkname = checkname + "A" + format(args.A_quant)
-if args.B_quant is not None:
-    checkname = checkname + "B" + format(args.B_quant)
-if args.C_quant is not None:
-    checkname = checkname + "C" + format(args.C_quant)
-if args.dt_quant is not None:
-    checkname = checkname + "dt" + format(args.dt_quant)
-if args.kernel_quant is not None:
-    checkname = checkname + "kernel" + format(args.kernel_quant)
-if args.linear_quant is not None:
-    checkname = checkname + "linear" + format(args.linear_quant)
-if args.act_quant is not None:
-    checkname = checkname + "act" + format(args.act_quant)
-if args.coder_quant is not None:
-    checkname = checkname + "coder" + format(args.coder_quant)
-if args.state_quant is not None:
-    checkname = checkname + "state" + format(args.state_quant)
-if args.weight_noise is not None:
-    checkname = checkname + "weight_noise" + format(args.weight_noise)
 
-if checkname == "":
-    checkname = "baseline"
+config_S4D = {
+    'N': args.d_state,
+    'H': args.d_model,
+    'n_layers': args.n_layers,
+    'd_in': 1,
+    'd_out': 10,
+    'r_A': args.A_quant,
+    'r_B': [0, 0, 0, 0],
+    'r_C': args.C_quant,
+    'r_state' : args.state_quant,
+    'r_lin': args.linear_quant,
+    'r_coder': args.coder_quant,
+    'r_act': args.act_quant,
+    'r_dt': args.dt_quant,
+}
+
+#import pdb
+#pdb.set_trace()
+
+### config cleanup ###
+for p in config_S4D:
+    if p in ['r_A', 'r_B', 'r_C', 'r_state', 'r_lin', 'r_act', 'r_dt']:
+        for i, elem in enumerate(config_S4D[p]):
+            if config_S4D[p][i] is None:
+                config_S4D[p][i] = 32
+    if p in ['r_coder']:
+        if config_S4D[p] is None:
+                config_S4D[p] = 32
+    if type(config_S4D[p]) is list:
+        for i, elem in enumerate(config_S4D[p]):
+            config_S4D[p][i] = int(elem)
+    else:
+        config_S4D[p] = int(config_S4D[p])
+
+
+def get_ACE_metric(config, model_type='ssm'):
+    if model_type == 'ssm':
+        ace_Ax = 0
+        ace_Bu = 0
+        ace_Cx = 0
+        ace_mixing = 0
+        for l in range(config['n_layers']):
+            ace_Ax += config['H'][l] * config['N'][l] * config['r_A'][l] * config['r_state'][l] * config['r_dt'][l]
+            ace_Bu += config['H'][l] * config['N'][l] * config['r_B'][l] * config['r_act'][l]
+            ace_Cx += config['H'][l] * config['N'][l] * config['r_C'][l] * config['r_state'][l]
+            if l < config['n_layers'] - 1:
+                ace_mixing += config['H'][l] * config['H'][l+1] * config['r_act'][l] * config['r_lin'][l+1]
+            else:
+                ace_mixing += config['H'][l] * config['H'][l] * config['r_act'][l] * config['r_lin'][l]
+
+        ace_kernels = ace_Ax + ace_Bu + ace_Cx
+
+        ace_layers = ace_kernels + ace_mixing
+
+        ace_encoder = config['H'][0] * config['d_in'] * config['r_coder'] * config['r_act'][0]
+        ace_decoder = config['H'][-1] * config['d_out'] * config['r_coder'] * config['r_act'][-1]
+
+        ace_total = ace_layers + ace_encoder + ace_decoder
+        print(ace_total / 1e6)
+    return ace_total
+
 
 # Model
 print('==> Building model..')
@@ -502,6 +623,8 @@ state = {
     'args': args,
 }
 
+ace = get_ACE_metric(config_S4D)
+
 if not os.path.isdir('checkpoint'):
     os.mkdir('checkpoint')
 if args.check_path is not None and not os.path.isdir('checkpoint/' + args.check_path):
@@ -514,21 +637,65 @@ if device == 'cuda':
     cudnn.benchmark = True
 
 if args.resume:
+    # Load checkpoint.
+    print('==> Resuming from checkpoint..')
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     checkpoint = torch.load('./checkpoint/ckpt.pth')
-    
+    model.load_state_dict(checkpoint['model'])
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
 
+def setup_optimizer(model, lr, weight_decay, epochs):
+    """
+    S4 requires a specific optimizer setup.
+
+    The S4 layer (A, B, C, dt) parameters typically
+    require a smaller learning rate (typically 0.001), with no weight decay.
+
+    The rest of the model can be trained with a higher learning rate (e.g. 0.004, 0.01)
+    and weight decay (if desired).
+    """
+
+    # All parameters in the model
+    all_parameters = list(model.parameters())
+
+    # General parameters don't contain the special _optim key
+    params = [p for p in all_parameters if not hasattr(p, "_optim")]
+
+    # Create an optimizer with the general parameters
+    optimizer = optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+
+    # Add parameters with special hyperparameters
+    hps = [getattr(p, "_optim") for p in all_parameters if hasattr(p, "_optim")]
+    hps = [
+        dict(s) for s in sorted(list(dict.fromkeys(frozenset(hp.items()) for hp in hps)))
+    ]  # Unique dicts
+    for hp in hps:
+        params = [p for p in all_parameters if getattr(p, "_optim", None) == hp]
+        optimizer.add_param_group(
+            {"params": params, **hp}
+        )
+
+    # Create a lr scheduler
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience, factor=0.2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
+
+    # Print optimizer info
+    keys = sorted(set([k for hp in hps for k in hp.keys()]))
+    for i, g in enumerate(optimizer.param_groups):
+        group_hps = {k: g.get(k, None) for k in keys}
+        print(' | '.join([
+            f"Optimizer group {i}",
+            f"{len(g['params'])} tensors",
+        ] + [f"{k} {v}" for k, v in group_hps.items()]))
+
+    return optimizer, scheduler
+
 criterion = nn.CrossEntropyLoss()
 
-def interpolate_checkpoints(ckpt1, ckpt2, alpha):
-    ckpt_new = copy.deepcopy(ckpt1)
-    for param in ckpt1['model']:
-        ckpt_new['model'][param].to(device)
-        ckpt_new['model'][param] = ckpt1['model'][param].to(device) * (1-alpha) + ckpt2['model'][param].to(device) * alpha
-    return ckpt_new
-
+optimizer, scheduler = setup_optimizer(
+    model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
+)
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
@@ -546,7 +713,48 @@ if args.check_path is not None:
 else:
     num_ckpt = len(os.listdir('./checkpoint/'))
 
-def eval(dataloader, test=False, checkpoint=False):
+# Training
+def train():
+    model.train()
+    train_loss = 0
+    correct = 0
+    total = 0
+    pbar = tqdm(enumerate(trainloader))
+    
+    #for batch_idx, (inputs, targets) in pbar:
+    for batch_idx, elem in pbar:
+        if args.dataset in ['list', 'text']:
+            inputs, targets, _ = elem
+            inputs = inputs.float()[:, :, None]
+            targets = targets#.int()
+        else:
+            inputs, targets = elem
+
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        if args.dataset == 'dn':
+            inputs = inputs.unsqueeze(2)
+            targets = targets.unsqueeze(2)
+
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+
+        train_loss += loss.item()
+        if args.dataset != 'dn':
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+
+            if batch_idx % 10 == 0:
+                pbar.set_description(
+                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                    (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                wandb.log({'loss': train_loss/(batch_idx+1), 
+                           'acc': 100*correct/total})
+
+def eval(epoch, dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
     eval_loss = 0
@@ -582,6 +790,10 @@ def eval(dataloader, test=False, checkpoint=False):
             else:
                 checkpoint = False
                 acc = 0
+        val_acc = 100*correct/total
+        combined_loss = ace/1e9 * torch.exp(torch.tensor(85. - val_acc)/1e2)
+        wandb.log({'ace': ace,
+                   'optim_loss': combined_loss})
  
         wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                    'val_acc': 100*correct/total})
@@ -592,16 +804,91 @@ def eval(dataloader, test=False, checkpoint=False):
         else:
             wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                        'val_acc': 100*correct/total})
+    
+    if np.isnan(eval_loss):
+        return -1
 
     acc = 100.*correct/total  
-    return eval_loss/(batch_idx+1), acc
+    # Save checkpoint.
+    if checkpoint:
+        
+        if acc > best_acc:
+            state = {
+                'model': model.state_dict(),
+                'acc': acc,
+                'epoch': epoch,
+            }
+            if args.check_path is None:
+                torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
+            else:
+                torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '.pth') #' ' + format(num_ckpt) + '.pth')
+            
+            best_acc = acc
+    return acc
 
-res_file = open("/Users/ssiegel/mem-hippo/evaluation/param_sweep/equal_quant_extended_fp", "w")
+if args.energy:
+    monitor.begin_window("training")
 
-for alpha in torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-    ckpt_new = interpolate_checkpoints(check1, check2, alpha)
-    model.load_state_dict(ckpt_new['model'])
-    print("Evaluating interpolated checkpoint with alpha: " + format(alpha))
-    loss, acc = eval(testloader, test=True)
-    print("Accuracy: " + format(acc))
-    res_file.write(format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+pbar = tqdm(range(start_epoch, args.epochs))
+best_acc = 0
+for epoch in pbar:
+
+    print("Epoch", epoch)
+    wandb.log({'epoch': epoch})
+
+    start = time.time()
+    train()
+    print("train time", time.time() - start)
+    print("Validation...")
+    val_acc = eval(epoch, valloader, checkpoint=False)
+    if val_acc == -1:
+        break
+    if val_acc > best_acc:
+        best_acc = val_acc
+
+    ### Break condictions for optimization speed up ###
+    if epoch == 10 and val_acc < 20:
+        break
+    if epoch == 30 and val_acc < 50:
+        break
+
+    print("\nTesting...")
+    eval(epoch, testloader, test=True)
+    scheduler.step()
+    print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
+
+
+if args.summary_file is not None:
+    summary_file = open(args.summary_file, "a+")
+    summary_file.write(format(best_acc) + "\t" + format(val_acc) + "\n")
+    summary_file.close()
+
+if args.check_path is not None:
+    if True:
+        state = {
+                'model': model.state_dict(),
+                'acc': val_acc,
+                'epoch': epoch,
+            }
+        #if args.check_path is None:
+        #    torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
+        #else:
+        #    torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '_last.pth')
+
+    file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
+    if args.all_quant is not None:
+        file.write("all\t" + checkname + " " + format(num_ckpt) + "\t" + format(best_acc) + "\n")
+        file.close()
+        exit()
+    else:
+        for param in model_args:
+            if model_args[param] is not None:
+                file.write(param + "\t" + format(model_args[param]) + "\t" + format(best_acc) + "\n")
+                file.close()
+                exit()
+    file.write("baseline\tfloat\t" + format(best_acc) + "\n")
+    file.close()
+
+if args.energy:
+    meas_total = monitor.end_window("training")
+    print(f"Total energy consumption of training run: {meas_total.total_energy / 3.6e6} kWh")
