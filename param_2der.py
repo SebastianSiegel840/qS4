@@ -128,6 +128,7 @@ parser.add_argument('--check_path', default=None)
 parser.add_argument('--summary_file', default=None)
 
 parser.add_argument('--param_part', default=None)
+parser.add_argument('--p_ckpt', default=None)
 
 parser_args = parser.parse_args()
 
@@ -515,7 +516,7 @@ if args.resume:
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
 
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(reduction='none')
 
 def interpolate_checkpoints(ckpt1, ckpt2, alpha):
     ckpt_new = copy.deepcopy(ckpt1)
@@ -544,7 +545,7 @@ else:
 def eval(dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
-    eval_loss = 0
+    eval_loss = torch.tensor([], device=device)
     correct = 0
     total = 0
     with torch.no_grad():
@@ -563,21 +564,26 @@ def eval(dataloader, test=False, checkpoint=False):
 
             outputs = model(inputs)
             loss = criterion(outputs, targets)
+            #print(batch_idx)
 
-            eval_loss += loss.item()
+            #import pdb
+            #pdb.set_trace()
+
+            eval_loss = torch.cat((eval_loss, loss), 0)
             if args.dataset != 'dn':
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
 
-                pbar.set_description(
-                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
-                     100.*correct/total, correct, total))
+                #pbar.set_description(
+                #    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                #    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
+                #     100.*correct/total, correct, total))
             else:
                 checkpoint = False
                 acc = 0
  
+        '''
         wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                    'val_acc': 100*correct/total})
 
@@ -587,20 +593,34 @@ def eval(dataloader, test=False, checkpoint=False):
         else:
             wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                        'val_acc': 100*correct/total})
+                       '''
 
     acc = 100.*correct/total  
-    return eval_loss/(batch_idx+1), acc
+    return eval_loss, acc
 
-checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/for_prune_0/all128.pth"
+if args.p_ckpt is None:
+    #checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/hessian_small_28_28_4/baseline.pth",
+    #checkpoint_start =  "/Users/ssiegel/mem-hippo/checkpoint/hessian_small_28_28_4/all1024.pth",
+    checkpoint_start =  "/Users/ssiegel/mem-hippo/checkpoint/for_prune_0/all128.pth"
+                        
+    #checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/for_hessian_test/baseline.pth"
+else:
+    checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/" + args.p_ckpt
+
 check1 = torch.load(checkpoint_start, map_location=device)
 
-alpha_range = [-0.001, 0.001, -0.01, 0.01, -0.1, 0.1, -0.5, 0.5, -1, 1]
+alpha_range = [1e-6, 1e-3, 1]
 
 if args.param_part is not None:
     param_part = args.param_part
 else:
     param_part = "s4_layers.0"
-res_file_name = "/Users/ssiegel/mem-hippo/evaluation/param_wiggle/" + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1] + "/" + param_part
+res_file_name = "/Users/ssiegel/mem-hippo/evaluation/param_der/" + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1] + "/" + param_part
+
+if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2]):
+    os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2])
+if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1]):
+    os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1])
 
 for n, ckpt in enumerate([check1]):
     res_file = open(res_file_name, "a+")
@@ -616,21 +636,71 @@ for n, ckpt in enumerate([check1]):
                         for j in range(ckpt['model'][param].shape[1]):
                             for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
                                 res_file = open(res_file_name, "a+")
-                                ckpt_new = copy.deepcopy(ckpt)
-                                ckpt_new['model'][param][i, j] = ckpt_new['model'][param][i, j] * (1 + alpha)
-                                model.load_state_dict(ckpt_new['model'])
+
                                 loss, acc = eval(testloader, test=True)
-                                res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+
+                                ckpt_plus = copy.deepcopy(ckpt)
+                                ckpt_plus['model'][param][i, j] = ckpt_plus['model'][param][i, j] + alpha
+                                model.load_state_dict(ckpt_plus['model'])
+                                loss_plus, acc_plus = eval(testloader, test=True)
+
+                                ckpt_minus = copy.deepcopy(ckpt)
+                                ckpt_minus['model'][param][i, j] = ckpt_minus['model'][param][i, j] - alpha
+                                model.load_state_dict(ckpt_minus['model'])
+                                loss_minus, acc_minus = eval(testloader, test=True)
+
+                                der1 = (loss_plus - loss_minus) / (2 * alpha)
+                                der2 = (loss_plus + loss_minus - 2 * loss) / (alpha ** 2)
+                                
+                                res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(alpha) + "\t"
+                                                     + format(torch.max(der1)) + "\t"
+                                                     + format(torch.max(torch.abs(der1))) + "\t"
+                                                     + format(torch.mean(der1)) + "\t"
+                                                     + format(torch.mean(torch.abs(der1))) + "\t"
+                                                     + format(torch.sum(der1)) + "\t"
+                                                     + format(torch.sum(torch.abs(der1))) + "\t"
+                                                     + format(torch.max(der2)) + "\t"
+                                                     + format(torch.max(torch.abs(der2))) + "\t"
+                                                     + format(torch.mean(der2)) + "\t"
+                                                     + format(torch.mean(torch.abs(der2))) + "\t"
+                                                     + format(torch.sum(der2)) + "\t"
+                                                     + format(torch.sum(torch.abs(der2))) + "\t"
+                                                     + format(acc) + "\n")
                                 res_file.close()
             elif len(ckpt['model'][param].shape) == 1:
                     for i in range(ckpt['model'][param].shape[0]):
                         for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
                             res_file = open(res_file_name, "a+")
-                            ckpt_new = copy.deepcopy(ckpt)
-                            ckpt_new['model'][param][i] = ckpt_new['model'][param][i] * (1 + alpha)
-                            model.load_state_dict(ckpt_new['model'])
+
                             loss, acc = eval(testloader, test=True)
-                            res_file.write(param + "\t" + format(i) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+
+                            ckpt_plus = copy.deepcopy(ckpt)
+                            ckpt_plus['model'][param][i] = ckpt_plus['model'][param][i] + alpha
+                            model.load_state_dict(ckpt_plus['model'])
+                            loss_plus, acc_plus = eval(testloader, test=True)
+
+                            ckpt_minus = copy.deepcopy(ckpt)
+                            ckpt_minus['model'][param][i] = ckpt_minus['model'][param][i] - alpha
+                            model.load_state_dict(ckpt_minus['model'])
+                            loss_minus, acc_minus = eval(testloader, test=True)
+
+                            der1 = (loss_plus - loss_minus) / (2 * alpha)
+                            der2 = (loss_plus + loss_minus - 2 * loss) / (alpha ** 2)
+
+                            res_file.write(param + "\t" + format(i) + "\t" + format(alpha) + "\t"
+                                                + format(torch.max(der1)) + "\t"
+                                                + format(torch.max(torch.abs(der1))) + "\t"
+                                                + format(torch.mean(der1)) + "\t"
+                                                + format(torch.mean(torch.abs(der1))) + "\t"
+                                                + format(torch.sum(der1)) + "\t"
+                                                + format(torch.sum(torch.abs(der1))) + "\t"
+                                                + format(torch.max(der2)) + "\t"
+                                                + format(torch.max(torch.abs(der2))) + "\t"
+                                                + format(torch.mean(der2)) + "\t"
+                                                + format(torch.mean(torch.abs(der2))) + "\t"
+                                                + format(torch.sum(der2)) + "\t"
+                                                + format(torch.sum(torch.abs(der2))) + "\t"
+                                                + format(acc) + "\n")
                             res_file.close()
             if len(ckpt['model'][param].shape) == 3:
                     for i in range(ckpt['model'][param].shape[0]):
@@ -638,11 +708,37 @@ for n, ckpt in enumerate([check1]):
                             for k in range(ckpt['model'][param].shape[2]):
                                 for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
                                     res_file = open(res_file_name, "a+")
-                                    ckpt_new = copy.deepcopy(ckpt)
-                                    ckpt_new['model'][param][i, j, k] = ckpt_new['model'][param][i, j, k] * (1 + alpha)
-                                    model.load_state_dict(ckpt_new['model'])
+
                                     loss, acc = eval(testloader, test=True)
-                                    res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(k) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
+
+                                    ckpt_plus = copy.deepcopy(ckpt)
+                                    ckpt_plus['model'][param][i, j, k] = ckpt_plus['model'][param][i, j, k] + alpha
+                                    model.load_state_dict(ckpt_plus['model'])
+                                    loss_plus, acc_plus = eval(testloader, test=True)
+
+                                    ckpt_minus = copy.deepcopy(ckpt)
+                                    ckpt_minus['model'][param][i, j, k] = ckpt_minus['model'][param][i, j, k] - alpha
+                                    model.load_state_dict(ckpt_minus['model'])
+                                    loss_minus, acc_minus = eval(testloader, test=True)
+
+                                    der1 = (loss_plus - loss_minus) / (2 * alpha)
+                                    der2 = (loss_plus + loss_minus - 2 * loss) / (alpha ** 2)
+
+                                    res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(k) + "\t" + format(alpha)  + "\t"
+                                                                + format(torch.max(der1)) + "\t"
+                                                                + format(torch.max(torch.abs(der1))) + "\t"
+                                                                + format(torch.mean(der1)) + "\t"
+                                                                + format(torch.mean(torch.abs(der1))) + "\t"
+                                                                + format(torch.sum(der1)) + "\t"
+                                                                + format(torch.sum(torch.abs(der1))) + "\t"
+                                                                + format(torch.max(der2)) + "\t"
+                                                                + format(torch.max(torch.abs(der2))) + "\t"
+                                                                + format(torch.mean(der2)) + "\t"
+                                                                + format(torch.mean(torch.abs(der2))) + "\t"
+                                                                + format(torch.sum(der2)) + "\t"
+                                                                + format(torch.sum(torch.abs(der2))) + "\t"
+                                                                + format(acc) + "\n")
+                                    
                                     res_file.close()
             else:
                 print(param)

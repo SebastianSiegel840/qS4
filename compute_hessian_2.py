@@ -86,9 +86,9 @@ parser.add_argument('--subsample', default=1, type=int, help='specify subsamplin
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
 parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
 # Model # SEE models/
-parser.add_argument('--n_layers_m', default=None, type=int, help='Number of layers')
-parser.add_argument('--d_model_m', default=None, type=int, help='Model dimension')
-parser.add_argument('--d_state', default=64, type=int, help='State dimension')
+parser.add_argument('--n_layers_m', default=1, type=int, help='Number of layers')
+parser.add_argument('--d_model_m', default=16, type=int, help='Model dimension')
+parser.add_argument('--d_state', default=16, type=int, help='State dimension')
 parser.add_argument('--dropout_m', default=None, type=float, help='Dropout')
 parser.add_argument('--prenorm', action='store_true', help='Prenorm')
 # General
@@ -127,7 +127,7 @@ parser.add_argument('--weight_noise', default=None, type=float, help='Weight noi
 parser.add_argument('--check_path', default=None)
 parser.add_argument('--summary_file', default=None)
 
-parser.add_argument('--param_part', default=None)
+parser.add_argument('--p_ckpt', default=None)
 
 parser_args = parser.parse_args()
 
@@ -517,22 +517,9 @@ if args.resume:
 
 criterion = nn.CrossEntropyLoss()
 
-def interpolate_checkpoints(ckpt1, ckpt2, alpha):
-    ckpt_new = copy.deepcopy(ckpt1)
-    for param in ckpt1['model']:
-        ckpt_new['model'][param].to(device)
-        ckpt_new['model'][param] = ckpt1['model'][param].to(device) * (1-alpha) + ckpt2['model'][param].to(device) * alpha
-    return ckpt_new
-
-
 ###############################################################################
 # Everything after this point is standard PyTorch training!
 ###############################################################################
-
-t_param = count_trainable_parameters(model)
-print("Trainable parameters:\t" + format(t_param))
-nt_param = count_nontrain_parameters(model)
-print("Non-trainable parameters:\t" + format(nt_param))
 
 if not os.path.isdir('checkpoint'):
     os.mkdir('checkpoint')
@@ -541,111 +528,131 @@ if args.check_path is not None:
 else:
     num_ckpt = len(os.listdir('./checkpoint/'))
 
+
+def eval_hessian_diag(loss, weights):
+    def cat_tensors(tensors):
+        t_tensor = torch.empty((sum(t.numel() for t in tensors),))
+        offset = 0
+        for t in tensors:
+            t_tensor[offset:offset + t.numel()] = t.contiguous().view(-1)
+            offset += t.numel()
+        return t_tensor
+    
+    loss_grad = torch.autograd.grad(loss, weights, create_graph=True, retain_graph=True)
+    g_tensor = cat_tensors(loss_grad)
+    w_tensor = cat_tensors(weights)
+    
+    l = g_tensor.size(0)
+    hessian_diag = torch.empty(l)    
+    for idx in range(l):
+        #grad2rd = torch.autograd.grad(g_tensor[idx], w_tensor[idx], create_graph=True)#, allow_unused=True)
+        grad2rd = torch.autograd.grad(g_tensor[idx], w_tensor[idx], retain_graph=True)
+        hessian_diag[l] = grad2rd[0]
+
+    return hessian_diag
+
 def eval(dataloader, test=False, checkpoint=False):
     global best_acc
     model.eval()
     eval_loss = 0
     correct = 0
     total = 0
-    with torch.no_grad():
-        pbar = tqdm(enumerate(dataloader))
-        for batch_idx, elem in pbar:
-            if args.dataset in ['list', 'text']:
-                inputs, targets, _ = elem
-                inputs = inputs.float()[:, :, None]
-                targets = targets#.int()
-            else:
-                inputs, targets = elem
-            inputs, targets = inputs.to(device), targets.to(device)
-            if args.dataset == 'dn':
-                inputs = inputs.unsqueeze(2)
-                targets = targets.unsqueeze(2)
 
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
+    from functorch import make_functional, jacfwd, jacrev, vmap, hessian
+    #fnet, params = make_functional(model)
+    #per_sample_hessian = vmap(jacfwd(jacrev(fnet, argnums=0), argnums=0), in_dims=(None, 0))
 
-            eval_loss += loss.item()
-            if args.dataset != 'dn':
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
-
-                pbar.set_description(
-                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
-                     100.*correct/total, correct, total))
-            else:
-                checkpoint = False
-                acc = 0
- 
-        wandb.log({'val_loss': eval_loss/(batch_idx+1), 
-                   'val_acc': 100*correct/total})
-
-        if test:
-            wandb.log({'test_loss': eval_loss/(batch_idx+1), 
-                        'test_acc': 100*correct/total})
+    #with torch.no_grad():
+    pbar = tqdm(enumerate(dataloader))
+    for batch_idx, elem in pbar:
+        if args.dataset in ['list', 'text']:
+            inputs, targets, _ = elem
+            inputs = inputs.float()[:, :, None]
+            targets = targets#.int()
         else:
-            wandb.log({'val_loss': eval_loss/(batch_idx+1), 
-                       'val_acc': 100*correct/total})
+            inputs, targets = elem
+        inputs, targets = inputs.to(device), targets.to(device)
+        if args.dataset == 'dn':
+            inputs = inputs.unsqueeze(2)
+            targets = targets.unsqueeze(2)
+
+        #outputs = model(inputs)
+        #loss = criterion(outputs, targets)
+        #loss.backward()
+
+        fnet, params = make_functional(model)
+        #test = fnet(params, inputs)
+        
+        #loss = criterion(fnet(params, inputs), targets)
+
+        #hessian = eval_hessian_diag(loss, params)
+
+        hessian_buildin = torch.func.hessian(fnet, argnums=1)(params, inputs[0])
+        #fnet, params = make_functional(model)
+        #per_sample_hessian = vmap(jacfwd(jacrev(fnet, argnums=0), argnums=0), in_dims=(None, 0))(inputs, params)
+
+        #for param_part in params:
+        #hessian = per_sample_hessian(params, inputs)
+
+        eval_loss += loss.item()
+        if args.dataset != 'dn':
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+
+            pbar.set_description(
+                'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
+                    100.*correct/total, correct, total))
+        else:
+            checkpoint = False
+            acc = 0
+
+    wandb.log({'val_loss': eval_loss/(batch_idx+1), 
+                'val_acc': 100*correct/total})
+
+    if test:
+        wandb.log({'test_loss': eval_loss/(batch_idx+1), 
+                    'test_acc': 100*correct/total})
+    else:
+        wandb.log({'val_loss': eval_loss/(batch_idx+1), 
+                    'val_acc': 100*correct/total})
 
     acc = 100.*correct/total  
     return eval_loss/(batch_idx+1), acc
 
-checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/for_prune_0/all128.pth"
+if args.p_ckpt is None:
+    checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/for_hessian_test/baseline.pth"
+else:
+    checkpoint_start = "/Users/ssiegel/mem-hippo/checkpoint/" + args.p_ckpt
+
 check1 = torch.load(checkpoint_start, map_location=device)
 
-alpha_range = [-0.001, 0.001, -0.01, 0.01, -0.1, 0.1, -0.5, 0.5, -1, 1]
+param_part = "s4_layer"
 
-if args.param_part is not None:
-    param_part = args.param_part
-else:
-    param_part = "s4_layers.0"
-res_file_name = "/Users/ssiegel/mem-hippo/evaluation/param_wiggle/" + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1] + "/" + param_part
+
 
 for n, ckpt in enumerate([check1]):
-    res_file = open(res_file_name, "a+")
+
+    if args.p_ckpt is None:
+        res_file_name = "/Users/ssiegel/mem-hippo/evaluation/hessian/hessian_test"
+    else:
+        res_file_name = "/Users/ssiegel/mem-hippo/evaluation/hessian/hessian_" + args.p_ckpt
+        if not os.path.isdir("/Users/ssiegel/mem-hippo/evaluation/hessian/"):
+            os.mkdir("/Users/ssiegel/mem-hippo/evaluation/hessian/")
+
+    res_file = open(res_file_name, "w")
     model.load_state_dict(ckpt['model'])
     loss, acc = eval(testloader, test=True)
-    res_file.write("baseline\t" + format(loss) + "\t" + format(acc) + "\n")
+    baseline_acc = acc
     res_file.close()
 
-    for param in ckpt['model']:
-        if param_part in param:
-            if len(ckpt['model'][param].shape) == 2:
-                    for i in range(ckpt['model'][param].shape[0]):
-                        for j in range(ckpt['model'][param].shape[1]):
-                            for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-                                res_file = open(res_file_name, "a+")
-                                ckpt_new = copy.deepcopy(ckpt)
-                                ckpt_new['model'][param][i, j] = ckpt_new['model'][param][i, j] * (1 + alpha)
-                                model.load_state_dict(ckpt_new['model'])
-                                loss, acc = eval(testloader, test=True)
-                                res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
-                                res_file.close()
-            elif len(ckpt['model'][param].shape) == 1:
-                    for i in range(ckpt['model'][param].shape[0]):
-                        for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-                            res_file = open(res_file_name, "a+")
-                            ckpt_new = copy.deepcopy(ckpt)
-                            ckpt_new['model'][param][i] = ckpt_new['model'][param][i] * (1 + alpha)
-                            model.load_state_dict(ckpt_new['model'])
-                            loss, acc = eval(testloader, test=True)
-                            res_file.write(param + "\t" + format(i) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
-                            res_file.close()
-            if len(ckpt['model'][param].shape) == 3:
-                    for i in range(ckpt['model'][param].shape[0]):
-                        for j in range(ckpt['model'][param].shape[1]):
-                            for k in range(ckpt['model'][param].shape[2]):
-                                for alpha in alpha_range: #torch.concatenate((torch.arange(-1.0, 0.0, 0.05), torch.arange(-0.01, 0.0, 0.001), torch.arange(0.0, 0.01, 0.001), torch.arange(0.01, 0.1, 0.01), torch.arange(0.1, 0.9, 0.05), torch.arange(0.9, 0.99, 0.01), torch.arange(0.99, 1.00, 0.001), torch.arange(1.0, 1.01, 0.001), torch.arange(1.05, 2.05, 0.05))):
-                                    res_file = open(res_file_name, "a+")
-                                    ckpt_new = copy.deepcopy(ckpt)
-                                    ckpt_new['model'][param][i, j, k] = ckpt_new['model'][param][i, j, k] * (1 + alpha)
-                                    model.load_state_dict(ckpt_new['model'])
-                                    loss, acc = eval(testloader, test=True)
-                                    res_file.write(param + "\t" + format(i) + "\t" + format(j) + "\t" + format(k) + "\t" + format(alpha) + "\t" + format(loss) + "\t" + format(acc) + "\n")
-                                    res_file.close()
-            else:
-                print(param)
-                print(len(ckpt['model'][param]))
+    from functorch import make_functional, jacfwd, jacrev, vmap
+    
+    per_sample_hessian = vmap(jacfwd(jacrev(fnet, argnums=0), argnums=0), in_dims=(None, 0))(params, x)
+
+
+
+
 
 

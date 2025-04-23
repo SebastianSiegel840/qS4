@@ -214,7 +214,7 @@ class S4Model(nn.Module):
         else:
             self.decoder = pt.BaseLinear(d_model[n_layers-1], d_output)
 
-    def forward(self, x, analysis=False):
+    def forward(self, x, analysis=False): # normal forward
         """
         Input x is shape (B, L, d_input)
         """
@@ -274,6 +274,65 @@ class S4Model(nn.Module):
             return x, y_encoder, y_layers#.permute(0,2,1)
         else:
             return x
+
+    def forwardignore(self, inputs, analysis=False): # for hessian ->directly calculates loss
+        """
+        Input x is shape (B, L, d_input)
+        """
+        x, target = inputs
+        #x = self.encoder(x.permute(0,2,1))  # (B, L, d_input) -> (B, L, d_model)
+        x = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
+        #if self.coder_quant is not None:
+        if analysis:
+            y_encoder = deepcopy(x)
+            if self.coder_quant is not None:
+                x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
+            y_layers = []
+
+        x = x.transpose(-1, -2)  # (B, L, d_model) -> (B, d_model, L)
+        for layer, norm, dropout in zip(self.s4_layers, self.norms, self.dropouts):
+            # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
+
+            #import pdb
+            #pdb.set_trace()
+            z = x
+            if self.prenorm:
+                # Prenorm
+                if self.norm_fn == 'layer':
+                    z = norm(z.transpose(-1, -2)).transpose(-1, -2)                
+                elif self.norm_fn == 'batch':
+                    z = norm(z)
+                    #z = norm(z.transpose(-1, -2)).transpose(-1, -2)
+
+            # Apply S4 block: we ignore the state input and output
+            z, _ = layer(z)
+            if analysis:
+                y_layers.append(deepcopy(z))
+
+            # Dropout on the output of the S4 block
+            z = dropout(z)
+
+            # Residual connection
+            x = z# + x
+
+            if not self.prenorm:
+                # Postnorm
+                if self.norm_fn == 'layer':
+                    x = norm(x.transpose(-1, -2)).transpose(-1, -2)
+                elif self.norm_fn == 'batch':
+                    x = norm(x)
+                    #x = norm(x.transpose(-1, -2)).transpose(-1, -2)
+        
+        x = x.transpose(-1, -2)
+
+        # Pooling: average pooling over the sequence length
+        x = x.mean(dim=1)
+
+        # Decode the outputs
+        x = self.decoder(x)  # (B, d_model) -> (B, d_output)
+        #if self.coder_quant is not None:
+        #    x = x - (x - max_quant_fn(x, quant_levels=self.coder_quant))
+        return nn.CrossEntropyLoss(x, target)
 
 if __name__ == "__main__":
 
