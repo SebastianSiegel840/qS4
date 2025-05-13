@@ -84,7 +84,7 @@ class return_args(object):
                 d_state = 128,
                 dropout = 0.1, #0.1 0.0
                 prenorm = 'store_true',
-                norm_fn = 'layer', #### CHANGED!!! layer is original ######
+                norm_fn = 'batch', #### CHANGED!!! layer is original ######
                 epochs = 200,
                 batch_size = 64,
                 weight_decay = 0.05
@@ -350,6 +350,25 @@ if __name__ == "__main__":
     model = S4Model(
         params
     )
+
+class MaxQuantFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, a, quant_levels=2, defmax=None):
+        #print("Forward called!")
+        #a = a.clone()
+        #quant_levels = quant_levels.clone()
+        if defmax is None:
+            scale = quant_levels / 2 / torch.clamp(torch.max(a.abs().flatten(), dim=-1, keepdim=True)[0], min=1e-5) 
+        else:
+            scale = quant_levels / 2 / torch.clamp(defmax, min=1e-5)
+        a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2, max=quant_levels // 2) / scale
+        return a_out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        grad_input = grad_out.clone()
+        #print('Backward called!')
+        return grad_input, None, None
 
 
 # taken from bitnet 1.58b

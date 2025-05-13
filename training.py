@@ -267,7 +267,7 @@ elif args.dataset == "hd":
     
     #transform = resampler
     transform_train = transform_test = None
-    datapath = "/Local/ssiegel/datasets"
+    datapath = "/Data/pgi-14/ssiegel/datasets"
     trainset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
         subset="train", 

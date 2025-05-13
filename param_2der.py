@@ -617,10 +617,10 @@ else:
     param_part = "s4_layers.0"
 res_file_name = "/Users/ssiegel/mem-hippo/evaluation/param_der/" + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1] + "/" + param_part
 
-if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2]):
-    os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2])
-if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1]):
-    os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1])
+# if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2]):
+#     os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2])
+# if not os.path.isdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1]):
+#     os.mkdir('/Users/ssiegel/mem-hippo/evaluation/param_der/' + checkpoint_start.rsplit("/")[-2] + "/" + checkpoint_start.rsplit("/")[-1])
 
 for n, ckpt in enumerate([check1]):
     res_file = open(res_file_name, "a+")

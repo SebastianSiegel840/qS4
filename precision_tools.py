@@ -38,6 +38,41 @@ def reduce_precision_t(M, prec=2**16):
             M[i] = vals[torch.argmin(torch.pow(vals - M[i], 2))]
     return M
 
+
+class MaxQuantFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, a, quant_levels=2, defmax=None):
+        #print("Forward called!")
+        #a = a.clone()
+        #quant_levels = quant_levels.clone()
+        if defmax is not None:
+            ctx.save_for_backward(a, torch.tensor(quant_levels), torch.tensor(defmax))
+        else:
+            ctx.save_for_backward(a, torch.tensor(quant_levels), torch.tensor(0.0))
+
+
+        if defmax is None:
+            scale = quant_levels / 2 / torch.clamp(torch.max(a.abs().flatten(), dim=-1, keepdim=True)[0], min=1e-5) 
+        else:
+            scale = quant_levels / 2 / torch.clamp(defmax, min=1e-5)
+        a_out = torch.clamp((a * scale).round(), min=-quant_levels // 2, max=quant_levels // 2) / scale
+        return a_out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        #qa_approx = a - torch.sin(a / delta * torch.pi)**3
+
+        a, quant_levels, defmax = ctx.saved_tensors
+
+        k = 3
+        delta = torch.max(torch.abs(a)) / quant_levels
+
+        sur_grad = k * torch.sin(a / delta * torch.pi) ** (k-1) * torch.cos(a / delta * torch.pi) / delta * torch.pi
+
+        grad_input = grad_out.clone() * sur_grad
+        return grad_input, None, None
+
+
 # Quantization for quantization-wawre training with STE
 # taken from bitnet 1.58b
 def max_quant_fn(a, quant_levels=2):
@@ -72,10 +107,11 @@ class QuantizedLinear(Linear):
         self.quant_fn = quant_fn
     
     def forward(self, input: Tensor) -> Tensor:
-        return F.linear(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
+        # return F.linear(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
+        return F.linear(input, MaxQuantFn.apply(self.weight, self.quant_levels), self.bias)
 
     def analysis(self):
-        return self.weight, self.quant_fn(self.weight, self.quant_levels)
+        return self.weight, MaxQuantFn.apply(self.weight, self.quant_levels)
     
 
 class BaseLinear(Linear):
@@ -156,7 +192,7 @@ class QuantizedConv1d(torch.nn.Conv1d):
 
     def forward(self, input: Tensor) -> Tensor:
         if self.quant_levels is not None:
-            return self._conv_forward(input, self.weight - (self.weight - self.quant_fn(self.weight, self.quant_levels)).detach(), self.bias)
+            return self._conv_forward(input, MaxQuantFn.apply(self.weight, self.quant_levels), self.bias)
         else:
             return self._conv_forward(input, self.weight, self.bias)
 

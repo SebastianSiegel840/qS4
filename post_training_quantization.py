@@ -272,7 +272,7 @@ elif args.dataset == "hd":
     d_output = 10
     collate_fn = None
 
-elif args.dataset == "dn": # denoising task
+elif args.dataset == "dn": # denoising task:
     trainset = DNSAudio(args, root=dataset_folder + 'training_set/')
     valset = DNSAudio(args, root=dataset_folder + 'validation_set/')
     testset = DNSAudio(args, root=dataset_folder + 'validation_set/') #TODO test set
@@ -323,8 +323,8 @@ if device == 'cuda':
 if args.dataset == 'cifar10':
     #check_point_test_path = './checkpoint/baseline_gr/baseline.pth'
     #file_name = "parameterSweep" + "_max_gr_S4D"
-    check_point_test_path = './checkpoint/baseline_gr_S4fourier/baseline.pth'
-    file_name = "parameterSweep" + "_max_gr_S4fourier"
+    check_point_test_path = './checkpoint/for_ptq/baseline.pth'
+    file_name = "parameterSweep" + "_max_gr_new"
 elif args.dataset == 'hd':
     if args.n_layers_m == None:
         check_point_test_path = './checkpoint/baseline_hd/ 5.pth'
