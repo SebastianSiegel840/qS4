@@ -1,28 +1,3 @@
-'''
-Train an S4 model on sequential CIFAR10 / sequential MNIST with PyTorch for demonstration purposes.
-This code borrows heavily from https://github.com/kuangliu/pytorch-cifar.
-
-This file only depends on the standalone S4 layer
-available in /models/s4/
-
-* Train standard sequential CIFAR:
-    python -m example
-* Train sequential CIFAR grayscale:
-    python -m example --grayscale
-* Train MNIST:
-    python -m example --dataset mnist --d_model 256 --weight_decay 0.0
-
-The `S4Model` class defined in this file provides a simple backbone to train S4 models.
-This backbone is a good starting point for many problems, although some tasks (especially generation)
-may require using other backbones.
-
-The default CIFAR10 model trained by this file should get
-89+% accuracy on the CIFAR10 test set in 80 epochs.
-
-Each epoch takes approximately 7m20s on a T4 GPU (will be much faster on V100 / A100).
-'''
-print("Started!")
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -47,13 +22,10 @@ from os.path import expanduser
 home = expanduser("~")
 path_s4 = os.path.join(home, 'state-spaces')
 sys.path.append(path_s4)
-#from src.dataloaders import lra
 
 sys.path.append("models")
 
 print("Modules load!")
-
-dataset_folder = '/Data/pgi-15/datasets/intel_dns/'
 
 # Dropout broke in PyTorch 1.11
 if tuple(map(int, torch.__version__.split('.')[:2])) == (1, 11):
@@ -267,7 +239,7 @@ elif args.dataset == "hd":
     
     #transform = resampler
     transform_train = transform_test = None
-    datapath = "/Data/pgi-14/ssiegel/datasets"
+    datapath = "/datasets"
     trainset = audio_dataset.HD(
         path=datapath + "/hd_audio", 
         subset="train", 
@@ -298,34 +270,6 @@ elif args.dataset == "hd":
     else:
         d_output = 10
     collate_fn = None
-
-elif args.dataset == "sc":
-    gsc_path = "/Data/pgi-15/datasets/GSC/"
-
-    transform_train = transform_test = None
-    datapath = "/Users/ssiegel/datasets"
-    trainset = audio_dataset.SC(
-        path=gsc_path, 
-        subset="training",
-        transform=transform_train,
-        subsample=args.subsample)
-    print("Passed")
-    valset = audio_dataset.SC(
-        path=gsc_path, 
-        subset="validation", 
-        transform=transform_test,
-        subsample=args.subsample)
-
-    testset = audio_dataset.SC(
-        path=gsc_path, 
-        subset="testing", 
-        transform=transform_test,
-        subsample=args.subsample)
-
-    d_input = 1
-    d_output = 36
-    collate_fn = None
-
 elif args.dataset == "pathfinder":
     from pathfinder import PathFinderDataset
     trainset = PathFinderDataset(transform=transforms.ToTensor())
@@ -348,53 +292,8 @@ elif args.dataset == "pathfinder":
     d_input = 1
     d_output = 2
 
-elif args.dataset == "dn": # denoising task
-    trainset = DNSAudio(args, root=dataset_folder + 'training_set/')
-    valset = DNSAudio(args, root=dataset_folder + 'validation_set/')
-    testset = DNSAudio(args, root=dataset_folder + 'validation_set/') #TODO test set
-
-    d_input = 1
-    d_output = 1
-    def collate_fn(batch):
-        noisy, clean, noise = [], [], []
-
-        for sample in batch:
-            noisy += [torch.FloatTensor(sample[0])]
-            clean += [torch.FloatTensor(sample[1])]
-            #noise += [torch.FloatTensor(sample[2])]
-
-        #return torch.stack(noisy), torch.stack(clean), torch.stack(noise)
-        return torch.stack(noisy), torch.stack(clean)
 else: 
     raise NotImplementedError 
-'''elif args.dataset == "list": # ListOps of LRA
-    d_input = 1
-    d_output = 10
-
-    dataset = lra.ListOps("listops", data_dir="/Local/ssiegel/datasets/lra_release/listops-1000")
-    dataset.setup()
-    trainset = dataset.dataset_train
-    valset = dataset.dataset_val
-    testset = dataset.dataset_test
-    
-    collate_fn = dataset._collate_fn
-
-elif args.dataset == "text": # ListOps of LRA
-        d_input = 1
-        d_output = 2
-
-        dataset = lra.IMDB("imdb")
-        dataset.setup()
-        trainset = dataset.dataset_train
-        valset = dataset.dataset_train
-        testset = dataset.dataset_train
-
-        #import pdb
-        #pdb.set_trace()
-    
-    collate_fn = dataset._collate_fn
-'''
-
 
 
 def custom_collate(batch):
@@ -488,10 +387,10 @@ if args.all_quant is not None:
     }
 else:
     model_args = {
-        'A_quant': args.A_quant, #[args.A_quant for _ in range(args.n_layers_m)],
-        'B_quant': args.B_quant, #[args.B_quant for _ in range(args.n_layers_m)],
-        'C_quant': args.C_quant, #[args.C_quant for _ in range(args.n_layers_m)],
-        'dt_quant': args.dt_quant, #[args.dt_quant for _ in range(args.n_layers_m)],
+        'A_quant': args.A_quant,
+        'B_quant': args.B_quant,
+        'C_quant': args.C_quant, 
+        'dt_quant': args.dt_quant,
         'kernel_quant': args.kernel_quant,
         'linear_quant': args.linear_quant,
         'act_quant': args.act_quant,
@@ -546,16 +445,6 @@ if args.resume:
     start_epoch = checkpoint['epoch']
 
 def setup_optimizer(model, lr, weight_decay, epochs):
-    """
-    S4 requires a specific optimizer setup.
-
-    The S4 layer (A, B, C, dt) parameters typically
-    require a smaller learning rate (typically 0.001), with no weight decay.
-
-    The rest of the model can be trained with a higher learning rate (e.g. 0.004, 0.01)
-    and weight decay (if desired).
-    """
-
     # All parameters in the model
     all_parameters = list(model.parameters())
 
@@ -623,18 +512,10 @@ def train():
     
     #for batch_idx, (inputs, targets) in pbar:
     for batch_idx, elem in pbar:
-        if args.dataset in ['list', 'text']:
-            inputs, targets, _ = elem
-            inputs = inputs.float()[:, :, None]
-            targets = targets#.int()
-        else:
-            inputs, targets = elem
+        inputs, targets = elem
 
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
-        if args.dataset == 'dn':
-            inputs = inputs.unsqueeze(2)
-            targets = targets.unsqueeze(2)
 
         outputs = model(inputs)
         loss = criterion(outputs, targets)
@@ -642,17 +523,16 @@ def train():
         optimizer.step()
 
         train_loss += loss.item()
-        if args.dataset != 'dn':
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
 
-            if batch_idx % 10 == 0:
-                pbar.set_description(
-                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-                wandb.log({'loss': train_loss/(batch_idx+1), 
-                           'acc': 100*correct/total})
+        if batch_idx % 10 == 0:
+            pbar.set_description(
+                'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+            wandb.log({'loss': train_loss/(batch_idx+1), 
+                        'acc': 100*correct/total})
 
 def eval(epoch, dataloader, test=False, checkpoint=False):
     global best_acc
@@ -663,33 +543,22 @@ def eval(epoch, dataloader, test=False, checkpoint=False):
     with torch.no_grad():
         pbar = tqdm(enumerate(dataloader))
         for batch_idx, elem in pbar:
-            if args.dataset in ['list', 'text']:
-                inputs, targets, _ = elem
-                inputs = inputs.float()[:, :, None]
-                targets = targets#.int()
-            else:
-                inputs, targets = elem
+            inputs, targets = elem
             inputs, targets = inputs.to(device), targets.to(device)
-            if args.dataset == 'dn':
-                inputs = inputs.unsqueeze(2)
-                targets = targets.unsqueeze(2)
 
             outputs = model(inputs)
             loss = criterion(outputs, targets)
 
             eval_loss += loss.item()
-            if args.dataset != 'dn':
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
 
-                pbar.set_description(
-                    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
-                     100.*correct/total, correct, total))
-            else:
-                checkpoint = False
-                acc = 0
+            pbar.set_description(
+                'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (batch_idx, len(dataloader), eval_loss/(batch_idx+1),
+                    100.*correct/total, correct, total))
+
  
         wandb.log({'val_loss': eval_loss/(batch_idx+1), 
                    'val_acc': 100*correct/total})
@@ -759,10 +628,6 @@ if args.check_path is not None:
                 'acc': val_acc,
                 'epoch': epoch,
             }
-        #if args.check_path is None:
-        #    torch.save(state, './checkpoint/ckpt' + format(num_ckpt) + '.pth')
-        #else:
-        #    torch.save(state, './checkpoint/' + args.check_path + '/' + checkname + '_last.pth')
 
     file = open('./checkpoint/' + args.check_path + '/val_acc', "a+")
     if args.all_quant is not None:
