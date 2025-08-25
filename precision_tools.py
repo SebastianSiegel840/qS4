@@ -5,40 +5,6 @@ from torch.nn import Linear
 from torch.nn import functional as F
 from torch import Tensor
 
-# Precision reduction for numpy matrices #
-def reduce_precision_np(M, prec=2**16):
-    max = np.max(M)
-    min = np.min(M)
-
-    vals = np.linspace(min, max, prec)
-    #print(M.shape)
-    if len(M.shape) == 2:
-        for i in range(M.shape[0]):
-            for j in range(M.shape[1]):
-                M[i, j] = vals[np.argmin(np.power(vals - M[i, j], 2))]
-    elif len(M.shape) == 1:
-        for i in range(M.shape[0]):
-            M[i] = vals[np.argmin(np.power(vals - M[i], 2))]
-    return M
-
-# Precision reduction for pytorch tensors #
-def reduce_precision_t(M, prec=2**16):
-    max = torch.max(M)
-    min = torch.min(M)
-    device = M.device
-
-    vals = torch.linspace(min, max, prec).to(device)
-    #print(M.shape)
-    if len(M.shape) == 2:
-        for i in range(M.shape[0]):
-            for j in range(M.shape[1]):
-                M[i, j] = vals[torch.argmin(torch.pow(vals - M[i, j], 2))]
-    elif len(M.shape) == 1:
-        for i in range(M.shape[0]):
-            M[i] = vals[torch.argmin(torch.pow(vals - M[i], 2))]
-    return M
-
-
 class MaxQuantFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, a, quant_levels=2, defmax=None):
