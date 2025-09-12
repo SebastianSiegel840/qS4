@@ -26,16 +26,8 @@ class MaxQuantFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_out):
-        #qa_approx = a - torch.sin(a / delta * torch.pi)**3
 
-        a, quant_levels, defmax = ctx.saved_tensors
-
-        k = 3
-        delta = torch.max(torch.abs(a)) / quant_levels
-
-        sur_grad = k * torch.sin(a / delta * torch.pi) ** (k-1) * torch.cos(a / delta * torch.pi) / delta * torch.pi
-
-        grad_input = grad_out.clone() * sur_grad
+        grad_input = grad_out.clone()
         return grad_input, None, None
 
 
