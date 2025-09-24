@@ -18,7 +18,6 @@ To check the impact of quantization and the benefits of QAT, the senquential CIF
 ### Quantization helps with structured pruning
 ![Pruning](images/Figure_Pruning.png)
 
-### Quantizability vs. model size
+### Quantizability vs. model size and quantization reducing noise impact
 ![NoiseSize](images/Figure_NoiseSize.png)
 
-### Quantiozation reduces noise impact
