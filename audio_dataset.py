@@ -78,7 +78,7 @@ class HD(Dataset):
         return sample_res, label
 
 
-datapath = "/Users/ssiegel/datasets"
+datapath = "./datasets"
 
 
 def export_to_numpy(dataset, folder):
